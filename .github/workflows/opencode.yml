@@ -1,5 +1,12 @@
 name: opencode
 
+# 触发规则（第 3 层防护，见下方 if）：
+# 1) 只有仓库所有者本人（auulb）能触发，其他人（含协作者、陌生人）全部忽略
+# 2) 评论必须以 /oc 或 /opencode 开头，写在句子中间不触发
+#    用 startsWith 而非 contains：OpenCode 的回复里会出现 `.github/workflows/opencode.yml`
+#    这种路径（含 "/opencode"），用 contains 会导致自我触发死循环
+# 3) 忽略机器人评论、忽略带 Actions 运行链接的评论
+
 on:
   issue_comment:
     types: [created]
@@ -8,21 +15,13 @@ on:
 
 jobs:
   opencode:
-    # 触发规则：评论【必须以】/oc 或 /opencode 开头（例如 `/oc 帮我修一下这个 bug`）。
-    # 用 startsWith 而不是 contains，是为了避免 OpenCode 自己的回复里出现
-    # `.github/workflows/opencode.yml` 这类路径（含 "/opencode"）而触发无限循环。
-    # 同时忽略机器人评论、忽略包含 Actions 运行链接的评论，并且只允许仓库所有者/协作者触发。
     if: |
+      github.event.comment.user.login == github.repository_owner &&
       github.event.comment.user.type != 'Bot' &&
       !contains(github.event.comment.body, '/actions/runs/') &&
       (
         startsWith(github.event.comment.body, '/oc') ||
         startsWith(github.event.comment.body, '/opencode')
-      ) &&
-      (
-        github.event.comment.author_association == 'OWNER' ||
-        github.event.comment.author_association == 'MEMBER' ||
-        github.event.comment.author_association == 'COLLABORATOR'
       )
     runs-on: ubuntu-latest
     permissions:
