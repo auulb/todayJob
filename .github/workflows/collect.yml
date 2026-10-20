@@ -39,11 +39,36 @@ jobs:
           node-version: '22'
 
       - name: Collect jobs and write today's post
+        id: collect
         env:
           TZ: Asia/Shanghai
           TODAYJOB_DATE: ${{ github.event.inputs.date }}
+          TODAYJOB_STATUS_FILE: ${{ runner.temp }}/todayjob-status.json
           ZHAOPIN_COOKIE: ${{ secrets.ZHAOPIN_COOKIE }}
         run: node scripts/collect.mjs
+
+      - name: Check collection status
+        id: status
+        if: steps.collect.outcome == 'success'
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/todayjob-status.json"
+          echo "mode=$(jq -r '.mode // "unknown"' "$file")" >> "$GITHUB_OUTPUT"
+          echo "cookie_status=$(jq -r '.cookieStatus // "unknown"' "$file")" >> "$GITHUB_OUTPUT"
+          echo "cookie_reason=$(jq -r '.cookieFallbackReason // ""' "$file")" >> "$GITHUB_OUTPUT"
+
+      - name: Email cookie expiry alert
+        if: steps.status.outputs.cookie_status == 'expired' || steps.status.outputs.cookie_status == 'invalid'
+        continue-on-error: true
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO || secrets.SMTP_USERNAME }}
+          TODAYJOB_STATUS_FILE: ${{ runner.temp }}/todayjob-status.json
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          ALERT_COOLDOWN_DAYS: '3'
+        run: python3 scripts/send-cookie-alert.py
 
       - name: Commit and push to main
         env:
@@ -54,6 +79,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add content/post
+          if [ -f .todayjob/cookie-alert.json ]; then
+            git add .todayjob/cookie-alert.json
+          fi
           if git diff --cached --quiet; then
             echo "No new daily post to commit."
             exit 0

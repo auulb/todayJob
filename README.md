@@ -55,9 +55,39 @@ themes/hugo-theme-stack Stack 主题（git submodule）
 
 智联招聘接口在匿名状态下每个关键词最多返回 100 条（每页 20 条）；携带有效的浏览器 Cookie 时，每个关键词最多可返回 1000 条（每页 90 条）。
 
-如需更完整的覆盖，在仓库 **Settings → Secrets and variables → Actions** 中添加 `ZHAOPIN_COOKIE`，值来自已打开 `zhaopin.com` 的浏览器 Cookie（至少包含 `at`、`rt`、`x-zp-client-id`）。未配置时脚本会自动回退到匿名模式，并在文章末尾注明覆盖范围有限。
+如需更完整的覆盖，在仓库 **Settings → Secrets and variables → Actions** 中添加 `ZHAOPIN_COOKIE`。推荐直接用 Cookie 小工具生成：
+
+1. 打开 <https://todayjob.vercel.app/cookie/>。
+2. 把「生成 Cookie」按钮拖到浏览器书签栏。
+3. 登录智联招聘后，在 `www.zhaopin.com` 页面点击该书签；弹窗会读取并验证 Cookie。
+4. 复制 Cookie，更新 `ZHAOPIN_COOKIE` Secret。
+
+工具只在 `zhaopin.com` 页面读取 Cookie，不会上传；至少需要 `at`、`rt`、`x-zp-client-id`。未配置时脚本会自动回退到匿名模式，并在文章末尾注明覆盖范围有限。
 
 脚本会串行请求、自动限速、按职位 ID 去重；遇到接口返回风控码 `2024` 会立即停止，不会重试。
+
+### Cookie 过期邮件提醒
+
+当 `ZHAOPIN_COOKIE` 已配置但接口返回空结果（通常是登录过期）时，`collect` 工作流会在采集完成后发送邮件提醒，并附上重新生成 Cookie 的链接。提醒最多每 3 天发送一次，避免重复打扰；Cookie 更新成功后自动停止。
+
+在仓库 **Settings → Secrets and variables → Actions** 中添加：
+
+| Secret | 说明 |
+| --- | --- |
+| `SMTP_USERNAME` | SMTP 账号，例如 QQ 邮箱地址 |
+| `SMTP_PASSWORD` | SMTP 授权码（不是邮箱登录密码） |
+| `ALERT_EMAIL_TO` | 收件邮箱；可选，默认使用 `SMTP_USERNAME` |
+
+默认使用 `smtp.qq.com:465`（SSL）。如需其他服务商，可在 `collect.yml` 的提醒步骤中设置 `SMTP_HOST` / `SMTP_PORT`。
+
+想单独测试邮件配置，可在 Actions 页面手动运行 **alert-test** 工作流，或本地执行：
+
+```bash
+SMTP_USERNAME=you@example.com \
+SMTP_PASSWORD='your-smtp-auth-code' \
+ALERT_EMAIL_TO=you@example.com \
+python3 scripts/send-cookie-alert.py --test
+```
 
 ### 可选 Secret：`TODAYJOB_PAT`
 

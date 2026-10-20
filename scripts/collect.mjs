@@ -14,6 +14,9 @@
  *                       to the anonymous limit (20 rows/page, 100/keyword).
  *   TODAYJOB_MAX_PAGES  Override the per-keyword page cap.
  *   TODAYJOB_OUTPUT     Write the generated post to this path instead.
+ *   TODAYJOB_STATUS_FILE
+ *                       Write a machine-readable run summary here. Used by the
+ *                       workflow to notify the maintainer when the cookie fails.
  *
  * The script is intentionally serial and conservative: it pauses between
  * requests, stops immediately on risk-control code 2024, and never touches
@@ -35,6 +38,9 @@ const COOKIE = process.env.ZHAOPIN_COOKIE?.trim() || '';
 const OUTPUT_PATH =
   process.env.TODAYJOB_OUTPUT ||
   path.join(ROOT, 'content', 'post', TARGET_DATE, 'index.md');
+const STATUS_PATH =
+  process.env.TODAYJOB_STATUS_FILE ||
+  path.join(ROOT, '.todayjob', 'last-run.json');
 const REQUEST_DELAY_MS = 650;
 const REQUEST_TIMEOUT_MS = 20_000;
 
@@ -512,6 +518,10 @@ function createClient() {
     cookie: full ? COOKIE : '',
     at,
     rt,
+    cookieStatus: full ? 'unverified' : (COOKIE ? 'invalid' : 'missing'),
+    cookieFallbackReason: full
+      ? ''
+      : (COOKIE ? 'Cookie 缺少 at 或 rt' : '未配置 Cookie'),
     pageSize: full ? 90 : 20,
     maxPages: Number(process.env.TODAYJOB_MAX_PAGES) || (full ? 6 : 5),
     checked: false,
@@ -528,6 +538,8 @@ function asAnonymous(client, reason) {
     cookie: '',
     at: '',
     rt: '',
+    cookieStatus: 'expired',
+    cookieFallbackReason: reason,
     pageSize: 20,
     maxPages: Number(process.env.TODAYJOB_MAX_PAGES) || 5,
     checked: true,
@@ -570,8 +582,9 @@ async function fetchPage(client, keyword, pageIndex) {
   if (client.mode === 'full' && !client.checked) {
     client.checked = true;
     if (Number(data.count || 0) === 0 && (!Array.isArray(data.list) || data.list.length === 0)) {
-      throw new AuthEmptyError('session returned zero results');
+      throw new AuthEmptyError('登录会话返回空结果');
     }
+    client.cookieStatus = 'valid';
   }
 
   return {
@@ -814,12 +827,18 @@ async function collect() {
   const summary = {
     date: TARGET_DATE,
     mode: client.mode,
+    cookieStatus: client.cookieStatus,
+    cookieFallbackReason: client.cookieFallbackReason,
+    cookieConfigured: Boolean(COOKIE),
     requests: client.requests,
     allJobsOnDate: allJobsOnDate.size,
     devJobs: devJobs.length,
     companies: companies.length,
+    collectedAt: collectedAt.toISOString(),
     output: OUTPUT_PATH,
   };
+  await mkdir(path.dirname(STATUS_PATH), { recursive: true });
+  await writeFile(STATUS_PATH, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify(summary, null, 2));
 }
 

@@ -2,3 +2,6 @@ public/
 resources/
 .hugo_build.lock
 .DS_Store
+
+.todayjob/last-run.json
+__pycache__/
