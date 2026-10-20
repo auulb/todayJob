@@ -49,7 +49,7 @@ export function renderPost(payload) {
     `date: ${new Date().toISOString().replace(/\.\d{3}Z$/, '+00:00')}`,
     `description: ${JSON.stringify(description)}`,
     'categories:',
-    '    - 日报',
+    '    - 前程无忧',
     'tags:',
     '    - "前程无忧"',
     ...cities.map((city) => `    - ${JSON.stringify(city)}`),

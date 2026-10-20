@@ -264,7 +264,7 @@ function renderPage({ periods, collectedAt }) {
     `lastmod: ${iso}`,
     `description: "${date} GitHub Trending 日榜、周榜、月榜，共 ${total} 个仓库。"`,
     'categories:',
-    '    - 日报',
+    '    - 趋势GitHub',
     'tags:',
     '    - GitHub Trending',
     'comments: false',

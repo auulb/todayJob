@@ -1006,7 +1006,7 @@ function renderMarkdown({ targets, client, collectedAt, budgetExhausted, request
     `date: ${shanghaiIso(collectedAt)}`,
     `description: "${description.replace(/"/g, '\\"')}"`,
     'categories:',
-    '    - 日报',
+    '    - 智联招聘',
     'tags:',
     ...cities.map((city) => `    - ${JSON.stringify(city)}`),
     ...jobs.map((job) => `    - ${JSON.stringify(`${job}岗位`)}`),
