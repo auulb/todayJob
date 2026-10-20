@@ -1,0 +1,89 @@
+name: collect-51job
+
+# 前程无忧（51job）日报：独立采集 + 独立发文，与智联日报完全无关。
+# 产出：content/post/51job-<日期>/index.md
+
+on:
+  schedule:
+    # 08:00 UTC = 16:00 Asia/Shanghai
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '目标日期（北京时间 YYYY-MM-DD），留空取今天'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: todayjob-collect-51job
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.TODAYJOB_PAT || github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # 51job 的接口在阿里云 WAF 后面，只能在真浏览器页面内发 XHR。
+      # 用 runner 预装的 Google Chrome（channel=chrome），headless 已实测可通过。
+      - name: Collect 51job jobs and render post
+        id: collect
+        env:
+          TZ: Asia/Shanghai
+          JOB51_DATE: ${{ github.event.inputs.date }}
+          JOB51_STATUS_FILE: ${{ runner.temp }}/job51-status.json
+        run: node scripts/job51/collect.mjs
+
+      - name: Report collection status
+        if: always()
+        run: |
+          set -euo pipefail
+          file="${RUNNER_TEMP}/job51-status.json"
+          if [ ! -f "$file" ]; then
+            echo "::warning::51job 采集未产出状态文件，检查上一步日志。"
+            exit 0
+          fi
+          node -e '
+            const s = require(process.argv[1]);
+            console.log(`ok=${s.ok} wafBlocked=${s.wafBlocked}`);
+            console.log(`targets=${s.targets} jobs=${s.jobs} onDate=${s.onDate}`);
+            console.log(`requests=${s.requests} errors=${s.errors} retries=${s.transientRetries}`);
+            console.log(`elapsed=${Math.round(s.elapsedMs / 1000)}s post=${s.post || "(未生成)"}`);
+            if (!s.post) console.log("::warning::本次未生成 51job 日报（0 条岗位或被风控），见上方日志。");
+          ' "$file"
+
+      - name: Commit and push to main
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add content/post
+          if git diff --cached --quiet; then
+            echo "No 51job post to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: add 51job daily report $(date +%F)"
+          git push origin HEAD:main
