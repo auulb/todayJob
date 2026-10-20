@@ -1,6 +1,6 @@
 # TodayJob
 
-记录厦门每天发布的开发岗位。
+记录每天发布的目标城市、目标岗位。
 
 - 每天北京时间 **17:00** 自动采集、分析并发布当天的岗位汇总。
 - 博客基于 [Hugo](https://gohugo.io/) + [Stack](https://github.com/CaiJimmy/hugo-theme-stack) 主题。
@@ -35,21 +35,81 @@ hugo --gc --minify
 content/post/          文章
 content/page/          归档、搜索等独立页面
 config/_default/       Hugo 与 Stack 主题配置
+collect.env            采集范围：城市集合、岗位集合、限速与请求上限
 themes/hugo-theme-stack Stack 主题（git submodule）
+```
+
+## 采集范围配置（collect.env）
+
+城市集合和岗位集合放在仓库根目录的 [`collect.env`](collect.env)，使用环境变量格式，不包含任何密钥。
+
+```env
+# 城市集合：名称:智联城市编码，多个城市用逗号分隔
+TODAYJOB_CITIES=厦门:682
+
+# 岗位集合：名称:profile:关键词1|关键词2|...
+TODAYJOB_JOBS=开发:dev:开发|Java|前端|后端|Python
+```
+
+- `TODAYJOB_CITIES`：城市集合。`name` 用于匹配职位城市和展示，`code` 是智联招聘城市编码（厦门是 `682`）。多个城市写成 `厦门:682,福州:591`。
+- `TODAYJOB_JOBS`：岗位集合。每项格式是 `名称:profile:关键词1|关键词2|...`，多个岗位用分号分隔。
+- `profile: "dev"`：使用内置的开发岗位过滤规则，适合“开发”这一组。
+- `profile: "keyword"`：按关键词或 `titleIncludes` 做标题包含匹配，适合测试、产品等自定义岗位。
+
+增加一个测试岗的示例（追加到 `TODAYJOB_JOBS`，用分号隔开）：
+
+```env
+TODAYJOB_JOBS=开发:dev:开发|Java|前端|后端|Python;测试:keyword:测试|自动化测试|测试开发:测试|QA|质量:销售|硬件|电子|医疗
+```
+
+自定义岗位完整格式是 `名称:profile:keywords:titleIncludes:exclude`，后两项可省略；`titleIncludes` 和 `exclude` 都是不区分大小写的包含匹配，多个词用 `|` 分隔。`collect.env` 支持行尾 `\` 续行和 `#` 注释。
+
+需要更多控制时（例如临时停用某个城市/岗位），可以把 `TODAYJOB_CITIES` 或 `TODAYJOB_JOBS` 写成 JSON 数组，并设置 `"enabled": false`：
+
+```env
+TODAYJOB_CITIES=[{"name":"厦门","code":"682"},{"name":"福州","code":"591","enabled":false}]
+```
+
+### 限速与防封
+
+默认值已经按保守策略设置，正常情况下不需要改。需要调整时，在 `collect.env` 中增加一行 `TODAYJOB_LIMITS`（JSON）：
+
+```env
+TODAYJOB_LIMITS={"maxCities":3,"maxJobs":3,"maxTargets":9,"maxKeywordsPerJob":40,"maxPagesFull":4,"maxPagesAnonymous":5,"maxRequestsPerRun":180,"requestDelayMs":1000,"requestJitterMs":250,"targetCooldownMs":1500}
+```
+
+- 请求串行，不并发；每次请求间隔 `1000ms` 加 `0–250ms` 随机抖动。
+- 每个“城市 × 岗位”组合最多 4 页（登录态）/ 5 页（匿名），每个岗位最多 40 个关键词。
+- 单次运行最多 180 次请求；达到上限会停止并生成带提示的部分日报。
+- 城市最多 3 个、岗位最多 3 个、组合最多 9 个；超过会直接报错，不会静默放大请求量。
+- 遇到风控码 `2024`、HTTP `403` 或 `429` 立即停止，不重试。
+- 工作流设置了 `concurrency`，不会同时运行两次采集。
+
+一次运行会生成一篇合并日报 `content/post/YYYY-MM-DD/index.md`，每个“城市 × 岗位”组合在文章里各占一节。修改 `collect.env` 并提交到 `main` 后，下一次 17:00 的任务就会按新范围采集；也可以在 Actions 里手动运行 **collect** 立即生效。
+
+如果不想把集合提交到公开仓库，可以：
+
+1. 本地把配置写到未跟踪的 `.env`，运行时设置 `TODAYJOB_ENV_FILE=.env`。
+2. GitHub Actions 中使用 Secrets：`TODAYJOB_CITIES`、`TODAYJOB_JOBS`、`TODAYJOB_LIMITS`。这些 Secrets 会覆盖 `collect.env`，不需要修改仓库文件。
+
+本地调试还可以用 `TODAYJOB_MAX_PAGES`、`TODAYJOB_MAX_REQUESTS` 覆盖分页和请求上限：
+
+```bash
+TODAYJOB_ENV_FILE=.env TODAYJOB_MAX_REQUESTS=20 TODAYJOB_OUTPUT=/tmp/preview.md node scripts/collect.mjs
 ```
 
 ## 自动更新
 
 每天北京时间 **17:00**（UTC 09:00），GitHub Actions 会自动执行：
 
-1. `.github/workflows/collect.yml` 调用智联招聘公开职位接口，采集厦门当天发布的开发岗位。
+1. `.github/workflows/collect.yml` 读取 `collect.env`（或 Secrets 覆盖），调用智联招聘公开职位接口采集配置中的城市和岗位。
 2. 按公司聚合后生成 `content/post/YYYY-MM-DD/index.md`，提交到 `main`。
 3. `.github/workflows/deploy.yml` 构建 Hugo 站点，将 `public/` 推送到 `gh-page`。
 4. Vercel 监听 `gh-page`，自动完成线上部署。
 
 ### 手动运行
 
-在 GitHub Actions 页面选择 **collect** → **Run workflow**，可以手动采集；`date` 留空表示北京时间当天。
+在 GitHub Actions 页面选择 **collect** → **Run workflow**，可以手动采集；`date` 留空表示北京时间当天。修改 `collect.env` 后提交，下一次运行会自动使用新的城市和岗位集合。
 
 ### 可选 Secret：`ZHAOPIN_COOKIE`
 

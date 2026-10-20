@@ -1,37 +1,49 @@
 #!/usr/bin/env node
 /**
- * Collect today's Xiamen development jobs from Zhaopin's public web API.
+ * Collect today's jobs from Zhaopin's public web API.
+ *
+ * The city and job sets live in collect.env so they can be changed without
+ * editing this script. Every run is serial, rate-limited, capped by a
+ * per-run request budget, and stops immediately on risk-control code 2024.
  *
  * Usage:
  *   node scripts/collect.mjs
  *   TODAYJOB_DATE=2026-10-21 node scripts/collect.mjs
  *   TODAYJOB_OUTPUT=/tmp/preview.md node scripts/collect.mjs
+ *   TODAYJOB_ENV_FILE=/tmp/collect.env node scripts/collect.mjs
  *
  * Optional environment:
- *   ZHAOPIN_COOKIE      Cookie header from a zhaopin.com browser session.
- *                       With a valid session, the API returns up to 90 rows/page
- *                       and 1000 rows/keyword. Without it, the script falls back
- *                       to the anonymous limit (20 rows/page, 100/keyword).
- *   TODAYJOB_MAX_PAGES  Override the per-keyword page cap.
- *   TODAYJOB_OUTPUT     Write the generated post to this path instead.
+ *   ZHAOPIN_COOKIE       Cookie header from a zhaopin.com browser session.
+ *                        With a valid session, the API returns up to 90 rows/page
+ *                        and 1000 rows/keyword. Without it, the script falls back
+ *                        to the anonymous limit (20 rows/page, 100/keyword).
+ *   TODAYJOB_ENV_FILE    Path to the env config. Defaults to collect.env.
+ *   TODAYJOB_CITIES      City set; overrides collect.env. Simple form:
+ *                        厦门:682,福州:591. JSON array is also accepted.
+ *   TODAYJOB_JOBS        Job set; overrides collect.env. Simple form:
+ *                        开发:dev:开发|Java|前端. JSON array is also accepted.
+ *   TODAYJOB_LIMITS      Optional JSON object overriding the built-in limits.
+ *   TODAYJOB_MAX_PAGES   Override the per-keyword page cap.
+ *   TODAYJOB_MAX_REQUESTS
+ *                        Override the per-run request budget.
+ *   TODAYJOB_OUTPUT      Write the generated post to this path instead.
  *   TODAYJOB_STATUS_FILE
- *                       Write a machine-readable run summary here. Used by the
- *                       workflow to notify the maintainer when the cookie fails.
+ *                        Write a machine-readable run summary here. Used by the
+ *                        workflow to notify the maintainer when the cookie fails.
  *
- * The script is intentionally serial and conservative: it pauses between
- * requests, stops immediately on risk-control code 2024, and never touches
- * private endpoints.
+ * Safety: requests are serial, delayed, capped, and never retried on 2024,
+ * 403, or 429. A rate-limit response stops the run instead of making it worse.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 
 const ROOT = process.cwd();
 const TIME_ZONE = 'Asia/Shanghai';
-const CITY_CODE = '682';
-const CITY_NAME = '厦门';
 const API_URL = 'https://fe-api.zhaopin.com/c/i/search/positions';
+const ENV_FILE =
+  process.env.TODAYJOB_ENV_FILE || path.join(ROOT, 'collect.env');
 
 const TARGET_DATE = process.env.TODAYJOB_DATE?.trim() || shanghaiDate(new Date());
 const COOKIE = process.env.ZHAOPIN_COOKIE?.trim() || '';
@@ -41,48 +53,21 @@ const OUTPUT_PATH =
 const STATUS_PATH =
   process.env.TODAYJOB_STATUS_FILE ||
   path.join(ROOT, '.todayjob', 'last-run.json');
-const REQUEST_DELAY_MS = 650;
 const REQUEST_TIMEOUT_MS = 20_000;
 
-const KEYWORDS = [
-  '开发',
-  'Java',
-  '前端',
-  '后端',
-  'Python',
-  '软件开发',
-  '前端开发',
-  '后端开发',
-  '软件工程师',
-  '测试开发',
-  '算法工程师',
-  '大数据',
-  '人工智能',
-  '机器学习',
-  '数据开发',
-  '运维开发',
-  '全栈开发',
-  '嵌入式开发',
-  '游戏开发',
-  '安卓',
-  'Android',
-  'iOS',
-  'C++',
-  'C#',
-  '.NET',
-  'PHP',
-  'Go',
-  'Node.js',
-  'React',
-  'Vue',
-  '小程序',
-  '鸿蒙',
-  'Flutter',
-  '低代码',
-  '区块链',
-  '云计算',
-  'DevOps',
-];
+const DEFAULT_LIMITS = {
+  maxCities: 3,
+  maxJobs: 3,
+  maxTargets: 9,
+  maxKeywordsPerJob: 40,
+  maxPagesFull: 4,
+  maxPagesAnonymous: 5,
+  maxRequestsPerRun: 180,
+  requestDelayMs: 1000,
+  requestJitterMs: 250,
+  targetCooldownMs: 1500,
+};
+
 
 const STRONG_DEV = [
   /软件工程师/,
@@ -310,6 +295,294 @@ const NON_DEV_EXCLUDE = [
   /平面设计/,
 ];
 
+function normalizeLimits(raw = {}) {
+  const bounds = {
+    maxCities: [1, 5],
+    maxJobs: [1, 5],
+    maxTargets: [1, 10],
+    maxKeywordsPerJob: [1, 50],
+    maxPagesFull: [1, 6],
+    maxPagesAnonymous: [1, 5],
+    maxRequestsPerRun: [10, 300],
+    requestDelayMs: [800, 10_000],
+    requestJitterMs: [0, 2_000],
+    targetCooldownMs: [0, 30_000],
+  };
+  const limits = {};
+  for (const [key, [min, max]] of Object.entries(bounds)) {
+    const value = Number(raw?.[key] ?? DEFAULT_LIMITS[key]);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      throw new Error(
+        `${ENV_FILE}: limits.${key} must be between ${min} and ${max}`,
+      );
+    }
+    limits[key] = Math.floor(value);
+  }
+  return limits;
+}
+
+function normalizeCities(raw, limits) {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(`${ENV_FILE}: cities must be a non-empty array`);
+  }
+
+  const cities = raw
+    .filter((city) => city && city.enabled !== false)
+    .map((city) => {
+      const name = String(city.name || '').trim();
+      const code = String(city.code || '').trim();
+      if (!name || !code) {
+        throw new Error(`${ENV_FILE}: every city needs name and code`);
+      }
+      return { name, code };
+    });
+
+  if (cities.length === 0) {
+    throw new Error(`${ENV_FILE}: at least one city must be enabled`);
+  }
+  if (cities.length > limits.maxCities) {
+    throw new Error(
+      `${ENV_FILE}: too many cities (${cities.length}); limit is ${limits.maxCities}`,
+    );
+  }
+
+  const seenCodes = new Set();
+  const seenNames = new Set();
+  for (const city of cities) {
+    if (seenCodes.has(city.code)) {
+      throw new Error(`${ENV_FILE}: duplicate city code ${city.code}`);
+    }
+    if (seenNames.has(city.name)) {
+      throw new Error(`${ENV_FILE}: duplicate city name ${city.name}`);
+    }
+    seenCodes.add(city.code);
+    seenNames.add(city.name);
+  }
+  return cities;
+}
+
+function normalizeJobs(raw, limits) {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(`${ENV_FILE}: jobs must be a non-empty array`);
+  }
+
+  const jobs = raw
+    .filter((job) => job && job.enabled !== false)
+    .map((job) => {
+      const name = String(job.name || '').trim();
+      const profile = String(job.profile || 'dev').trim();
+      if (!name) {
+        throw new Error(`${ENV_FILE}: every job needs a name`);
+      }
+      if (profile !== 'dev' && profile !== 'keyword') {
+        throw new Error(
+          `${ENV_FILE}: job "${name}" profile must be "dev" or "keyword"`,
+        );
+      }
+
+      const keywords = uniqueStrings(
+        (Array.isArray(job.keywords) ? job.keywords : [])
+          .map((keyword) => String(keyword || '').trim())
+          .filter(Boolean),
+      );
+      if (keywords.length === 0) {
+        throw new Error(`${ENV_FILE}: job "${name}" needs keywords`);
+      }
+      if (keywords.length > limits.maxKeywordsPerJob) {
+        throw new Error(
+          `${ENV_FILE}: job "${name}" has ${keywords.length} keywords; limit is ${limits.maxKeywordsPerJob}`,
+        );
+      }
+
+      const titleIncludes = uniqueStrings(
+        (Array.isArray(job.titleIncludes) ? job.titleIncludes : [])
+          .map((term) => String(term || '').trim())
+          .filter(Boolean),
+      );
+      const exclude = uniqueStrings(
+        (Array.isArray(job.exclude) ? job.exclude : [])
+          .map((term) => String(term || '').trim())
+          .filter(Boolean),
+      );
+
+      return { name, profile, keywords, titleIncludes, exclude };
+    });
+
+  if (jobs.length === 0) {
+    throw new Error(`${ENV_FILE}: at least one job must be enabled`);
+  }
+  if (jobs.length > limits.maxJobs) {
+    throw new Error(
+      `${ENV_FILE}: too many jobs (${jobs.length}); limit is ${limits.maxJobs}`,
+    );
+  }
+
+  const seenNames = new Set();
+  for (const job of jobs) {
+    if (seenNames.has(job.name)) {
+      throw new Error(`${ENV_FILE}: duplicate job name ${job.name}`);
+    }
+    seenNames.add(job.name);
+  }
+  return jobs;
+}
+
+async function loadEnvFile(file) {
+  let text;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw new Error(`Cannot read ${file}: ${error.message}`);
+  }
+
+  const vars = {};
+  let pending = '';
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+$/, '');
+    if (!pending && /^\s*#/.test(line)) continue;
+    if (!pending && !line.trim()) continue;
+
+    if (line.endsWith('\\')) {
+      pending += line.slice(0, -1);
+      continue;
+    }
+
+    const full = pending + line;
+    pending = '';
+    const match = full.match(
+      /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/,
+    );
+    if (!match) {
+      throw new Error(`${file}: invalid line: ${full.slice(0, 80)}`);
+    }
+
+    let value = match[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    vars[match[1]] = value;
+  }
+
+  if (pending) {
+    throw new Error(`${file}: unfinished line continuation`);
+  }
+  return vars;
+}
+
+function envValue(fileVars, key) {
+  const fromProcess = process.env[key];
+  if (typeof fromProcess === 'string' && fromProcess.trim()) {
+    return fromProcess.trim();
+  }
+  const fromFile = fileVars[key];
+  return typeof fromFile === 'string' ? fromFile.trim() : '';
+}
+
+function splitEnvList(value, separator) {
+  return String(value || '')
+    .split(separator)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseCities(raw) {
+  const text = String(raw || '').trim();
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error('must be a JSON array');
+      return parsed;
+    } catch (error) {
+      throw new Error(`${ENV_FILE}: TODAYJOB_CITIES JSON: ${error.message}`);
+    }
+  }
+
+  return splitEnvList(text, /[,，;；]/).map((item) => {
+    const index = item.indexOf(':');
+    if (index === -1) {
+      throw new Error(
+        `${ENV_FILE}: city "${item}" must use name:code, e.g. 厦门:682`,
+      );
+    }
+    return {
+      name: item.slice(0, index).trim(),
+      code: item.slice(index + 1).trim(),
+    };
+  });
+}
+
+function parseJobs(raw) {
+  const text = String(raw || '').trim();
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error('must be a JSON array');
+      return parsed;
+    } catch (error) {
+      throw new Error(`${ENV_FILE}: TODAYJOB_JOBS JSON: ${error.message}`);
+    }
+  }
+
+  return splitEnvList(text, /[;；]/).map((item) => {
+    const fields = item.split(':');
+    if (fields.length < 3 || fields.length > 5) {
+      throw new Error(
+        `${ENV_FILE}: job "${item}" must use name:profile:keywords[:titleIncludes[:exclude]]`,
+      );
+    }
+    const [name, profile, keywords, titleIncludes = '', exclude = ''] = fields;
+    return {
+      name: name.trim(),
+      profile: profile.trim() || 'dev',
+      keywords: splitEnvList(keywords, /[|｜]/),
+      titleIncludes: splitEnvList(titleIncludes, /[|｜]/),
+      exclude: splitEnvList(exclude, /[|｜]/),
+    };
+  });
+}
+
+function parseLimits(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('must be a JSON object');
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(`${ENV_FILE}: TODAYJOB_LIMITS JSON: ${error.message}`);
+  }
+}
+
+async function loadConfig() {
+  const fileVars = await loadEnvFile(ENV_FILE);
+  const citiesRaw = envValue(fileVars, 'TODAYJOB_CITIES');
+  const jobsRaw = envValue(fileVars, 'TODAYJOB_JOBS');
+  if (!citiesRaw) {
+    throw new Error(`${ENV_FILE}: TODAYJOB_CITIES is empty`);
+  }
+  if (!jobsRaw) {
+    throw new Error(`${ENV_FILE}: TODAYJOB_JOBS is empty`);
+  }
+
+  const limits = normalizeLimits(
+    parseLimits(envValue(fileVars, 'TODAYJOB_LIMITS')),
+  );
+  const cities = normalizeCities(parseCities(citiesRaw), limits);
+  const jobs = normalizeJobs(parseJobs(jobsRaw), limits);
+  if (cities.length * jobs.length > limits.maxTargets) {
+    throw new Error(
+      `${ENV_FILE}: ${cities.length} cities × ${jobs.length} jobs exceeds maxTargets=${limits.maxTargets}`,
+    );
+  }
+  return { cities, jobs, limits };
+}
+
 class RiskControlError extends Error {
   constructor(message) {
     super(message);
@@ -328,10 +601,6 @@ class AuthEmptyError extends Error {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function pad2(value) {
-  return String(value).padStart(2, '0');
 }
 
 function shanghaiParts(date) {
@@ -433,17 +702,36 @@ function normalizeJob(raw) {
   };
 }
 
-function isXiamen(job) {
-  return job.city.includes(CITY_NAME) || job.cityId === CITY_CODE;
+function cityNameKey(name) {
+  return String(name || '').replace(/市$/, '').trim();
 }
 
-function isDevTitle(title) {
+function isTargetCity(posting, city) {
+  const name = cityNameKey(city.name);
+  return (
+    (name && posting.city.includes(name)) ||
+    String(posting.cityId || '') === String(city.code)
+  );
+}
+
+function matchesJobTitle(title, job) {
   if (!title) return false;
-  if (NON_DEV_EXCLUDE.some((re) => re.test(title))) return false;
-  if (HARD_EXCLUDE.some((re) => re.test(title))) return false;
-  if (STRONG_DEV.some((re) => re.test(title))) return true;
-  if (!GENERIC_DEV.some((re) => re.test(title))) return false;
-  return !DOMAIN_EXCLUDE.some((re) => re.test(title));
+
+  const lower = title.toLowerCase();
+  if (job.exclude.some((term) => lower.includes(term.toLowerCase()))) {
+    return false;
+  }
+
+  if (job.profile === 'dev') {
+    if (NON_DEV_EXCLUDE.some((re) => re.test(title))) return false;
+    if (HARD_EXCLUDE.some((re) => re.test(title))) return false;
+    if (STRONG_DEV.some((re) => re.test(title))) return true;
+    if (!GENERIC_DEV.some((re) => re.test(title))) return false;
+    return !DOMAIN_EXCLUDE.some((re) => re.test(title));
+  }
+
+  const terms = job.titleIncludes.length ? job.titleIncludes : job.keywords;
+  return terms.some((term) => lower.includes(term.toLowerCase()));
 }
 
 function requestHeaders(cookie) {
@@ -474,7 +762,14 @@ async function requestJson(url, init, attempt = 1) {
       if (response.status === 2024) {
         throw new RiskControlError('Zhaopin returned HTTP 2024');
       }
-      if (response.status === 403 || response.status === 429 || response.status >= 500) {
+      // Do not retry 403/429: retries can turn a short throttle into a ban.
+      if (response.status === 403 || response.status === 429) {
+        throw new RiskControlError(`Zhaopin rate-limited the request (HTTP ${response.status})`);
+      }
+      if (response.status === 401) {
+        throw new AuthEmptyError('Zhaopin returned HTTP 401');
+      }
+      if (response.status >= 500) {
         throw new Error(`HTTP ${response.status}`);
       }
       throw new Error(`HTTP ${response.status}: ${text.slice(0, 160)}`);
@@ -494,12 +789,16 @@ async function requestJson(url, init, attempt = 1) {
     if (apiCode === 2024) {
       throw new RiskControlError('Zhaopin risk control code 2024');
     }
+    if (apiCode === 401) {
+      throw new AuthEmptyError('Zhaopin API code 401');
+    }
     if (apiCode !== 200) {
       throw new Error(`API code ${apiCode}: ${json.message || json.msg || 'unknown error'}`);
     }
     return json;
   } catch (error) {
     if (error instanceof RiskControlError) throw error;
+    if (error instanceof AuthEmptyError) throw error;
     if (attempt >= 3) throw error;
     const wait = 700 * 2 ** (attempt - 1);
     console.error(`[retry ${attempt}/3] ${error.message}; waiting ${wait}ms`);
@@ -508,7 +807,15 @@ async function requestJson(url, init, attempt = 1) {
   }
 }
 
-function createClient() {
+function pageCap(mode, limits) {
+  const override = Number(process.env.TODAYJOB_MAX_PAGES);
+  if (Number.isFinite(override) && override > 0) {
+    return Math.min(Math.floor(override), 6);
+  }
+  return mode === 'full' ? limits.maxPagesFull : limits.maxPagesAnonymous;
+}
+
+function createClient(limits) {
   const jar = cookieMap(COOKIE);
   const at = jar.get('at') || '';
   const rt = jar.get('rt') || '';
@@ -523,30 +830,28 @@ function createClient() {
       ? ''
       : (COOKIE ? 'Cookie 缺少 at 或 rt' : '未配置 Cookie'),
     pageSize: full ? 90 : 20,
-    maxPages: Number(process.env.TODAYJOB_MAX_PAGES) || (full ? 6 : 5),
+    maxPages: pageCap(full ? 'full' : 'anonymous', limits),
     checked: false,
     requests: 0,
   };
 }
 
-function asAnonymous(client, reason) {
+function asAnonymous(client, reason, limits) {
   if (client.mode === 'anonymous') return client;
   console.error(`[auth] ${reason}; falling back to anonymous mode`);
-  return {
-    ...client,
-    mode: 'anonymous',
-    cookie: '',
-    at: '',
-    rt: '',
-    cookieStatus: 'expired',
-    cookieFallbackReason: reason,
-    pageSize: 20,
-    maxPages: Number(process.env.TODAYJOB_MAX_PAGES) || 5,
-    checked: true,
-  };
+  client.mode = 'anonymous';
+  client.cookie = '';
+  client.at = '';
+  client.rt = '';
+  client.cookieStatus = 'expired';
+  client.cookieFallbackReason = reason;
+  client.pageSize = 20;
+  client.maxPages = pageCap('anonymous', limits);
+  client.checked = true;
+  return client;
 }
 
-async function fetchPage(client, keyword, pageIndex) {
+async function fetchPage(client, city, keyword, pageIndex) {
   const query = new URLSearchParams({
     platform: '13',
     version: '0.0.0',
@@ -560,7 +865,7 @@ async function fetchPage(client, keyword, pageIndex) {
 
   const body = {
     S_SOU_FULL_INDEX: keyword,
-    S_SOU_WORK_CITY: CITY_CODE,
+    S_SOU_WORK_CITY: city.code,
     order: 4,
     sortType: 'JOB_PUBLISH_TIME',
     pageSize: client.pageSize,
@@ -598,13 +903,13 @@ function uniqueStrings(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-function locationText(jobs) {
+function locationText(jobs, city) {
   const districts = uniqueStrings(jobs.map((job) => job.district));
-  if (districts.length === 0) return CITY_NAME;
-  return `${CITY_NAME} · ${districts.slice(0, 3).join('、')}${districts.length > 3 ? ' 等' : ''}`;
+  if (districts.length === 0) return city.name;
+  return `${city.name} · ${districts.slice(0, 3).join('、')}${districts.length > 3 ? ' 等' : ''}`;
 }
 
-function aggregate(jobs) {
+function aggregate(jobs, city) {
   const byCompany = new Map();
   for (const job of jobs) {
     const key = job.company.replace(/\s+/g, ' ').trim();
@@ -623,7 +928,7 @@ function aggregate(jobs) {
     companies.push({
       company,
       count: sorted.length,
-      location: locationText(sorted),
+      location: locationText(sorted, city),
       title: representative.title,
       url: representative.url,
       publishTime: representative.publishTime,
@@ -647,73 +952,134 @@ function mdCell(value) {
     .trim();
 }
 
-function mdLinkText(value) {
-  return mdCell(value).replace(/([\[\]])/g, '\\$1');
+function companyTableLines(companies) {
+  const lines = [
+    '| 公司名称 | 今日职位发布数量 | 地点 | 岗位链接 | 发布时间 |',
+    '| --- | ---: | --- | --- | --- |',
+  ];
+  for (const item of companies) {
+    const linkTitle = mdCell(item.title).replace(/"/g, '\\"');
+    const link = item.url
+      ? `[查看岗位](${item.url} "${linkTitle}")`
+      : '查看岗位';
+    lines.push(
+      `| ${mdCell(item.company)} | ${item.count} | ${mdCell(item.location)} | ${link} | ${mdCell(formatTime(item.publishTime))} |`,
+    );
+  }
+  return lines;
 }
 
-function renderMarkdown({ companies, devJobs, allJobsOnDate, keywords, client, collectedAt }) {
+function renderMarkdown({ targets, client, collectedAt, budgetExhausted, requestLimit }) {
   const [year, month, day] = TARGET_DATE.split('-');
-  const title = `${year}年${Number(month)}月${Number(day)}日 厦门开发岗位日报`;
-  const totalCompanies = companies.length;
-  const totalJobs = devJobs.length;
+  const cities = uniqueStrings(targets.map((target) => target.city.name));
+  const jobs = uniqueStrings(targets.map((target) => target.job.name));
+  const cityLabel = cities.join('、');
+  const jobLabel = jobs.join('、');
+  const single = targets.length === 1;
+
+  const totalCompanies = targets.reduce(
+    (sum, target) => sum + target.companies.length,
+    0,
+  );
+  const totalJobs = targets.reduce((sum, target) => sum + target.jobs.length, 0);
+  const totalKeywords = targets.reduce(
+    (sum, target) => sum + target.keywords,
+    0,
+  );
+  const totalKeywordsTotal = targets.reduce(
+    (sum, target) => sum + target.keywordsTotal,
+    0,
+  );
+
+  const title = single
+    ? `${year}年${Number(month)}月${Number(day)}日 ${cityLabel}${jobLabel}岗位日报`
+    : `${year}年${Number(month)}月${Number(day)}日 ${cityLabel} · ${jobLabel}岗位日报`;
   const description =
     totalJobs > 0
-      ? `${TARGET_DATE}，厦门共 ${totalCompanies} 家公司发布 ${totalJobs} 个开发岗位。`
-      : `${TARGET_DATE}，厦门暂未采集到符合条件的开发岗位。`;
+      ? `${TARGET_DATE}，${targets.length} 个城市/岗位组合共 ${totalCompanies} 家公司、${totalJobs} 个岗位。`
+      : `${TARGET_DATE}，暂未采集到符合当前配置的岗位。`;
 
   const lines = [
     '---',
-    `title: "${title}"`,
+    `title: "${title.replace(/"/g, '\\"')}"`,
     `slug: "${TARGET_DATE}"`,
     `date: ${shanghaiIso(collectedAt)}`,
     `description: "${description.replace(/"/g, '\\"')}"`,
     'categories:',
     '    - 日报',
     'tags:',
-    '    - 厦门',
-    '    - 开发岗位',
-    '    - 招聘日报',
+    ...cities.map((city) => `    - ${JSON.stringify(city)}`),
+    ...jobs.map((job) => `    - ${JSON.stringify(`${job}岗位`)}`),
+    '    - "招聘日报"',
     'comments: false',
     '---',
     '',
     `> 统计日期：${TARGET_DATE}（北京时间 00:00–24:00）  `,
+    `> 统计范围：${cityLabel} · ${jobLabel}  `,
     '> 数据来源：智联招聘公开职位接口  ',
     `> 采集时间：${shanghaiDateTime(collectedAt)}  `,
     `> 采集方式：${client.mode === 'full' ? '登录会话接口' : '匿名接口（单关键词最多 100 条）'}`,
     '',
-    '## 今日概览',
-    '',
-    `- 公司：**${totalCompanies}** 家`,
-    `- 开发岗位：**${totalJobs}** 个`,
-    `- 当日去重岗位：**${allJobsOnDate}** 个（含非开发岗）`,
-    `- 覆盖关键词：**${keywords}** 个`,
-    '',
   ];
 
-  if (totalJobs === 0) {
+  if (budgetExhausted) {
     lines.push(
-      '今天暂时没有采集到符合条件的岗位。',
+      `> 注意：本次达到请求上限 ${requestLimit} 次，已处理 ${totalKeywords}/${totalKeywordsTotal} 个关键词，结果可能不完整。`,
       '',
-      '可能是当天尚未发布新岗位，也可能是接口返回延迟。建议稍后刷新，或直接前往智联招聘搜索“厦门 开发”。',
+    );
+  }
+
+  lines.push(
+    '## 今日概览',
+    '',
+  );
+
+  if (single) {
+    const target = targets[0];
+    lines.push(
+      `- 公司：**${target.companies.length}** 家`,
+      `- ${target.job.name}岗位：**${target.jobs.length}** 个`,
+      `- 当日该城市去重岗位：**${target.allJobsOnDate}** 个（含其他岗位）`,
+      `- 覆盖关键词：**${target.keywords}/${target.keywordsTotal}** 个`,
     );
   } else {
     lines.push(
-      '<!--more-->',
-      '',
-      '## 公司汇总',
-      '',
-      '| 公司名称 | 今日职位发布数量 | 地点 | 岗位链接 | 发布时间 |',
-      '| --- | ---: | --- | --- | --- |',
+      `- 目标组合：**${targets.length}** 个（${cityLabel} × ${jobLabel}）`,
+      `- 公司（按组合合计）：**${totalCompanies}** 家`,
+      `- 岗位（按组合合计）：**${totalJobs}** 个`,
+      `- 覆盖关键词：**${totalKeywords}/${totalKeywordsTotal}** 个`,
     );
+  }
 
-    for (const item of companies) {
-      const linkTitle = mdCell(item.title).replace(/"/g, '\\"');
-      const link = item.url
-        ? `[查看岗位](${item.url} "${linkTitle}")`
-        : '查看岗位';
+  lines.push('', '<!--more-->', '');
+
+  if (single) {
+    const target = targets[0];
+    lines.push('## 公司汇总', '');
+    if (target.jobs.length === 0) {
       lines.push(
-        `| ${mdCell(item.company)} | ${item.count} | ${mdCell(item.location)} | ${link} | ${mdCell(formatTime(item.publishTime))} |`,
+        '今天暂时没有采集到符合条件的岗位。',
+        '',
+        `可能是当天尚未发布新岗位，也可能是接口返回延迟。可以稍后重试，或直接在智联招聘搜索“${target.city.name} ${target.job.name}”。`,
       );
+    } else {
+      lines.push(...companyTableLines(target.companies));
+    }
+  } else {
+    for (const target of targets) {
+      lines.push(`## ${target.city.name} · ${target.job.name}`, '');
+      lines.push(
+        `- 公司：**${target.companies.length}** 家`,
+        `- 岗位：**${target.jobs.length}** 个`,
+        `- 当日该城市去重岗位：**${target.allJobsOnDate}** 个（含其他岗位）`,
+        `- 覆盖关键词：**${target.keywords}/${target.keywordsTotal}** 个`,
+        '',
+      );
+      if (target.jobs.length === 0) {
+        lines.push('今天暂时没有采集到符合条件的岗位。', '');
+      } else {
+        lines.push(...companyTableLines(target.companies), '');
+      }
     }
   }
 
@@ -721,8 +1087,8 @@ function renderMarkdown({ companies, devJobs, allJobsOnDate, keywords, client, c
     '',
     '## 数据说明',
     '',
-    '- 仅统计发布时间在统计日期内的厦门开发岗位，按公司名称聚合。',
-    '- “今日职位发布数量”是该公司当天在厦门发布的开发岗位数；同一岗位跨关键词命中只计一次。',
+    '- 仅统计发布时间在统计日期内、符合当前配置城市与岗位的岗位，按公司名称聚合。',
+    `- “今日职位发布数量”是该公司当天在目标城市发布的${jobLabel}岗位数；同一岗位跨关键词命中只计一次。`,
     '- “岗位链接”取该公司当天最新发布的一个岗位，点击可查看详情；悬停可查看具体岗位名称。',
     '- 招聘平台数据可能存在延迟、重复或下架，最终以智联招聘页面为准。',
   );
@@ -737,93 +1103,186 @@ function renderMarkdown({ companies, devJobs, allJobsOnDate, keywords, client, c
   return lines.join('\n');
 }
 
-async function collect() {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(TARGET_DATE)) {
-    throw new Error(`Invalid TODAYJOB_DATE: ${TARGET_DATE}`);
-  }
-
-  let client = createClient();
-  console.error(
-    `[start] date=${TARGET_DATE} mode=${client.mode} keywords=${KEYWORDS.length} ` +
-      `pageSize=${client.pageSize} maxPages=${client.maxPages}`,
-  );
-
+async function collectTarget({ city, job, client, limits, requestLimit }) {
   const jobs = new Map();
-  let allJobsOnDate = new Set();
-  let requestCount = 0;
+  const allJobsOnDate = new Set();
+  let budgetExhausted = false;
+  let totalHits = 0;
+  let attemptedKeywords = 0;
 
-  for (const keyword of KEYWORDS) {
+  for (const keyword of job.keywords) {
+    if (client.requests >= requestLimit) {
+      budgetExhausted = true;
+      break;
+    }
+    attemptedKeywords += 1;
+
     let stalePages = 0;
     let keywordHits = 0;
 
     for (let pageIndex = 1; pageIndex <= client.maxPages; pageIndex += 1) {
+      if (client.requests >= requestLimit) {
+        budgetExhausted = true;
+        break;
+      }
+
       let page;
       try {
-        page = await fetchPage(client, keyword, pageIndex);
+        page = await fetchPage(client, city, keyword, pageIndex);
       } catch (error) {
-        if (error instanceof AuthEmptyError) {
-          client = asAnonymous(client, error.message);
+        if (error instanceof AuthEmptyError && client.mode !== 'anonymous') {
+          asAnonymous(client, error.message, limits);
           pageIndex -= 1;
           continue;
         }
         throw error;
       }
 
-      requestCount = client.requests;
       if (page.list.length === 0) break;
 
       let newest = 0;
       for (const raw of page.list) {
-        const job = normalizeJob(raw);
-        if (!job) continue;
-        const date = job.publishedAt ? shanghaiDate(job.publishedAt) : '';
-        if (date === TARGET_DATE) {
-          allJobsOnDate.add(job.id);
-          if (isXiamen(job) && isDevTitle(job.title)) {
-            const previous = jobs.get(job.id);
-            if (!previous || (job.publishedAt?.getTime() || 0) > (previous.publishedAt?.getTime() || 0)) {
-              jobs.set(job.id, job);
+        const posting = normalizeJob(raw);
+        if (!posting) continue;
+        const date = posting.publishedAt ? shanghaiDate(posting.publishedAt) : '';
+        if (date === TARGET_DATE && isTargetCity(posting, city)) {
+          allJobsOnDate.add(posting.id);
+          if (matchesJobTitle(posting.title, job)) {
+            const previous = jobs.get(posting.id);
+            if (
+              !previous ||
+              (posting.publishedAt?.getTime() || 0) >
+                (previous.publishedAt?.getTime() || 0)
+            ) {
+              jobs.set(posting.id, posting);
             }
             keywordHits += 1;
           }
         }
-        const ts = job.publishedAt?.getTime() || 0;
+        const ts = posting.publishedAt?.getTime() || 0;
         if (ts > newest) newest = ts;
       }
 
-      const targetDateStart = new Date(`${TARGET_DATE}T00:00:00+08:00`).getTime();
+      const targetDateStart = new Date(
+        `${TARGET_DATE}T00:00:00+08:00`,
+      ).getTime();
       const pageIsOld = newest > 0 && newest < targetDateStart;
       stalePages = pageIsOld ? stalePages + 1 : 0;
 
       if (page.isEndPage === 1) break;
       if (stalePages >= 2) break;
 
-      if (requestCount % 10 === 0) {
+      if (client.requests % 10 === 0) {
         console.error(
-          `[progress] requests=${requestCount} keyword=${keyword} page=${pageIndex} jobs=${jobs.size}`,
+          `[progress] requests=${client.requests} city=${city.name} job=${job.name} ` +
+            `keyword=${keyword} page=${pageIndex} jobs=${jobs.size}`,
         );
       }
-      await sleep(REQUEST_DELAY_MS + Math.floor(Math.random() * 120));
+
+      await sleep(
+        limits.requestDelayMs +
+          Math.floor(Math.random() * (limits.requestJitterMs + 1)),
+      );
     }
 
-    console.error(`[keyword] ${keyword}: +${keywordHits} (unique=${jobs.size})`);
+    totalHits += keywordHits;
+    console.error(
+      `[keyword] ${city.name}/${job.name}/${keyword}: +${keywordHits} (unique=${jobs.size})`,
+    );
+
+    if (budgetExhausted) break;
   }
 
-  const devJobs = [...jobs.values()];
-  const companies = aggregate(devJobs);
+  const postings = [...jobs.values()];
+  return {
+    city,
+    job,
+    jobs: postings,
+    companies: aggregate(postings, city),
+    allJobsOnDate: allJobsOnDate.size,
+    keywords: attemptedKeywords,
+    keywordsTotal: job.keywords.length,
+    keywordHits: totalHits,
+    budgetExhausted,
+  };
+}
+
+async function collect() {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(TARGET_DATE)) {
+    throw new Error(`Invalid TODAYJOB_DATE: ${TARGET_DATE}`);
+  }
+
+  const config = await loadConfig();
+  const client = createClient(config.limits);
+  const envLimit = Number(process.env.TODAYJOB_MAX_REQUESTS);
+  const requestLimit =
+    Number.isFinite(envLimit) && envLimit >= 1
+      ? Math.min(Math.floor(envLimit), 300)
+      : config.limits.maxRequestsPerRun;
+
+  const totalKeywords = config.jobs.reduce(
+    (sum, job) => sum + job.keywords.length,
+    0,
+  );
+  console.error(
+    `[start] date=${TARGET_DATE} mode=${client.mode} ` +
+      `cities=${config.cities.length} jobs=${config.jobs.length} keywords=${totalKeywords} ` +
+      `pageSize=${client.pageSize} maxPages=${client.maxPages} ` +
+      `delay=${config.limits.requestDelayMs}ms limit=${requestLimit}`,
+  );
+
+  const targets = [];
+  let budgetExhausted = false;
+
+  outer: for (const city of config.cities) {
+    for (const job of config.jobs) {
+      if (client.requests >= requestLimit) {
+        budgetExhausted = true;
+        break outer;
+      }
+
+      console.error(
+        `[target] city=${city.name}(${city.code}) job=${job.name} keywords=${job.keywords.length}`,
+      );
+      const result = await collectTarget({
+        city,
+        job,
+        client,
+        limits: config.limits,
+        requestLimit,
+      });
+      targets.push(result);
+
+      if (result.budgetExhausted) {
+        budgetExhausted = true;
+        break outer;
+      }
+
+      await sleep(config.limits.targetCooldownMs);
+    }
+  }
+
+  if (targets.length === 0) {
+    throw new Error('No target was collected');
+  }
+
   const collectedAt = new Date();
   const markdown = renderMarkdown({
-    companies,
-    devJobs,
-    allJobsOnDate: allJobsOnDate.size,
-    keywords: KEYWORDS.length,
+    targets,
     client,
     collectedAt,
+    budgetExhausted,
+    requestLimit,
   });
 
   await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
   await writeFile(OUTPUT_PATH, markdown, 'utf8');
 
+  const totalJobs = targets.reduce((sum, target) => sum + target.jobs.length, 0);
+  const totalCompanies = targets.reduce(
+    (sum, target) => sum + target.companies.length,
+    0,
+  );
   const summary = {
     date: TARGET_DATE,
     mode: client.mode,
@@ -831,9 +1290,20 @@ async function collect() {
     cookieFallbackReason: client.cookieFallbackReason,
     cookieConfigured: Boolean(COOKIE),
     requests: client.requests,
-    allJobsOnDate: allJobsOnDate.size,
-    devJobs: devJobs.length,
-    companies: companies.length,
+    requestLimit,
+    budgetExhausted,
+    targets: targets.map((target) => ({
+      city: target.city.name,
+      cityCode: target.city.code,
+      job: target.job.name,
+      keywords: target.keywords,
+      keywordsTotal: target.keywordsTotal,
+      allJobsOnDate: target.allJobsOnDate,
+      jobs: target.jobs.length,
+      companies: target.companies.length,
+    })),
+    totalJobs,
+    totalCompanies,
     collectedAt: collectedAt.toISOString(),
     output: OUTPUT_PATH,
   };

@@ -43,6 +43,11 @@ jobs:
         env:
           TZ: Asia/Shanghai
           TODAYJOB_DATE: ${{ github.event.inputs.date }}
+          TODAYJOB_ENV_FILE: collect.env
+          # Optional: Secrets override collect.env without committing private sets.
+          TODAYJOB_CITIES: ${{ secrets.TODAYJOB_CITIES }}
+          TODAYJOB_JOBS: ${{ secrets.TODAYJOB_JOBS }}
+          TODAYJOB_LIMITS: ${{ secrets.TODAYJOB_LIMITS }}
           TODAYJOB_STATUS_FILE: ${{ runner.temp }}/todayjob-status.json
           ZHAOPIN_COOKIE: ${{ secrets.ZHAOPIN_COOKIE }}
         run: node scripts/collect.mjs
@@ -56,6 +61,12 @@ jobs:
           echo "mode=$(jq -r '.mode // "unknown"' "$file")" >> "$GITHUB_OUTPUT"
           echo "cookie_status=$(jq -r '.cookieStatus // "unknown"' "$file")" >> "$GITHUB_OUTPUT"
           echo "cookie_reason=$(jq -r '.cookieFallbackReason // ""' "$file")" >> "$GITHUB_OUTPUT"
+          echo "requests=$(jq -r '.requests // 0' "$file")" >> "$GITHUB_OUTPUT"
+          echo "request_limit=$(jq -r '.requestLimit // 0' "$file")" >> "$GITHUB_OUTPUT"
+          echo "targets=$(jq -r '.targets | length' "$file")" >> "$GITHUB_OUTPUT"
+          if [ "$(jq -r '.budgetExhausted // false' "$file")" = "true" ]; then
+            echo "::warning::Collection stopped at the request budget; the report may be partial."
+          fi
 
       - name: Email cookie expiry alert
         if: steps.status.outputs.cookie_status == 'expired' || steps.status.outputs.cookie_status == 'invalid'
@@ -87,5 +98,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: publish $(date +%F) Xiamen dev jobs report"
+          git commit -m "chore: publish $(date +%F) job reports"
           git push origin HEAD:main
