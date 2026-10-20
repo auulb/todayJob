@@ -1,0 +1,244 @@
+name: pi
+
+# 用法：在 Issue（或 PR）里发一条以 /pi 开头的评论，例如
+#   /pi 修复这个 bug
+#   /pi 把 JSON 结果转成 Markdown 并更新 README
+#
+# 行为：pi 在分支 pi/issue-<编号> 上修改代码 → 提交 → 自动开 PR。
+# 同一个 Issue 再发一次 /pi，会在同一分支上继续迭代（PR 会自动更新）。
+#
+# 触发规则（避免误触发和自我触发）：
+# 1) 只有仓库所有者本人（github.repository_owner）能触发
+# 2) 评论必须以 /pi 开头（/pi 后面是空格、换行或结束；/ping 这类不会触发）
+# 3) 忽略机器人评论，忽略带 Actions 运行链接的评论（防止死循环）
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pi-${{ github.repository }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  pi:
+    if: |
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.user.type != 'Bot' &&
+      !contains(github.event.comment.body, '/actions/runs/') &&
+      startsWith(github.event.comment.body, '/pi')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # 优先使用仓库 secret PI_GITHUB_TOKEN（PAT），没有就退回内置 token
+      GH_TOKEN: ${{ secrets.PI_GITHUB_TOKEN || github.token }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      PI_MODEL: deepseek/deepseek-flash
+      PI_TELEMETRY: "0"
+      PI_SKIP_VERSION_CHECK: "1"
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_IS_PR: ${{ github.event.issue.pull_request != null }}
+      COMMENT_ID: ${{ github.event.comment.id }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.PI_GITHUB_TOKEN || github.token }}
+          fetch-depth: 1
+
+      - name: 解析 /pi 指令并生成提示词
+        id: parse
+        run: |
+          python3 - <<'PY'
+          import os, re
+
+          body = os.environ.get("COMMENT_BODY") or ""
+          out = os.environ["GITHUB_OUTPUT"]
+          m = re.match(r"^\s*/pi(?:\s+|$)(.*)", body, re.S)
+
+          if not m:
+              print("::notice::不是 /pi 指令，跳过")
+              open(out, "a").write("should_run=false\n")
+              raise SystemExit(0)
+
+          instruction = m.group(1).strip()
+          if not instruction:
+              instruction = "请处理该 Issue/PR 正文里描述的问题。"
+
+          title = (os.environ.get("ISSUE_TITLE") or "").strip()
+          issue_body = (os.environ.get("ISSUE_BODY") or "").strip() or "(无正文)"
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          number = os.environ.get("ISSUE_NUMBER", "")
+          is_pr = os.environ.get("ISSUE_IS_PR") == "true"
+          kind = "Pull Request" if is_pr else "Issue"
+          base = os.environ.get("BASE_BRANCH", "main")
+
+          prompt = f"""你是 pi，一个运行在 GitHub Actions 里的自动化编码 agent。仓库已经检出在你的工作目录里。
+
+          ## 上下文
+          - 仓库：{repo}
+          - 编号：#{number}（{kind}）
+          - 目标分支：{base}
+          - 当前分支：pi/issue-{number}（已经为你准备好）
+
+          ## {kind} 标题
+          {title or "(无标题)"}
+
+          ## {kind} 正文
+          {issue_body}
+
+          ## 本次指令（来自仓库所有者的评论）
+          {instruction}
+
+          ## 工作要求
+          1. 直接在当前工作目录修改文件。不要执行 git commit / git push / gh pr create，也不要新建分支：提交和 PR 由工作流负责。
+          2. 改动要聚焦上面的指令，保持最小改动，不要顺手重构无关代码。
+          3. 除非指令明确要求，不要修改 .github/workflows 下的文件。
+          4. 绝对不要写入或提交任何密钥、token；需要凭据时从环境变量读取（例如 DEEPSEEK_API_KEY）。
+          5. 如果仓库里有测试/构建脚本，改完后尽量运行一次验证；失败就修到通过，或说明原因。
+          6. 不要提问、不要等待确认（这是无人值守环境）。有歧义时选最合理的方案，并在总结里说明假设。
+          7. 最后用中文输出一份简短总结：改了哪些文件、为什么、怎么验证的。
+          """
+          open("/tmp/pi-prompt.md", "w").write(prompt)
+          open("/tmp/pi-instruction.txt", "w").write(instruction)
+
+          first_line = instruction.splitlines()[0].strip() if instruction else "处理任务"
+          open("/tmp/pr-title.txt", "w").write(f"pi: {first_line}"[:100])
+
+          open(out, "a").write("should_run=true\n")
+          print(f"指令：{instruction[:120]}")
+          PY
+
+      - name: 给评论加个 👀
+        if: steps.parse.outputs.should_run == 'true'
+        continue-on-error: true
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes > /dev/null
+
+      - name: 设置 Node.js
+        if: steps.parse.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 准备分支 pi/issue-${{ github.event.issue.number }}
+        id: branch
+        if: steps.parse.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          BRANCH="pi/issue-${ISSUE_NUMBER}"
+          git config --global user.name "pi"
+          git config --global user.email "pi@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch --depth=1 origin "$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
+            echo "继续在已有分支 $BRANCH 上工作"
+          else
+            git checkout -B "$BRANCH"
+            echo "从 $BASE_BRANCH 新建分支 $BRANCH"
+          fi
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: 安装 pi
+        if: steps.parse.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1
+          pi --version
+
+      - name: 运行 pi
+        if: steps.parse.outputs.should_run == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          pi --print --no-session -na \
+            --model "$PI_MODEL" \
+            "$(cat /tmp/pi-prompt.md)" 2>&1 | tee /tmp/pi-output.log
+          code=${PIPESTATUS[0]}
+          echo "pi_exit=$code" >> "$GITHUB_ENV"
+          exit "$code"
+
+      - name: 提交、推送并创建 PR
+        id: pr
+        if: steps.parse.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "没有代码改动，跳过提交"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+          git add -A
+          git commit -m "$(cat /tmp/pr-title.txt)" -m "Refs #${ISSUE_NUMBER}"
+          git push origin "HEAD:refs/heads/${BRANCH}"
+
+          {
+            echo "## 任务"
+            echo
+            sed -n '1,40p' /tmp/pi-instruction.txt
+            echo
+            echo "Refs #${ISSUE_NUMBER}"
+            echo
+            echo "## pi 的总结"
+            echo
+            echo '```'
+            tail -c 4000 /tmp/pi-output.log 2>/dev/null || echo "(无输出)"
+            echo '```'
+            echo
+            echo "---"
+            echo "🤖 由 pi（\`${PI_MODEL}\`）在 GitHub Actions 中自动生成。"
+          } > /tmp/pr-body.txt
+
+          if ! gh pr view "$BRANCH" --json url -q .url > /tmp/pr-url.txt 2>/dev/null; then
+            gh pr create \
+              --base "$BASE_BRANCH" \
+              --head "$BRANCH" \
+              --title "$(cat /tmp/pr-title.txt)" \
+              --body-file /tmp/pr-body.txt > /tmp/pr-url.txt
+          fi
+          echo "pr_url=$(cat /tmp/pr-url.txt)" >> "$GITHUB_OUTPUT"
+          echo "PR: $(cat /tmp/pr-url.txt)"
+        env:
+          BRANCH: ${{ steps.branch.outputs.branch }}
+
+      - name: 在 Issue 里回复结果
+        if: always() && steps.parse.outputs.should_run == 'true'
+        run: |
+          {
+            if [ -n "${PR_URL:-}" ]; then
+              echo "✅ 已提交 PR：${PR_URL}"
+            elif [ "${CHANGED:-false}" = "true" ]; then
+              echo "✅ 已推送代码到分支 \`${BRANCH}\`。"
+            else
+              echo "ℹ️ 这次没有产生代码改动。"
+            fi
+            echo
+            echo "<details><summary>pi 输出</summary>"
+            echo
+            echo '```'
+            tail -c 8000 /tmp/pi-output.log 2>/dev/null || echo "(无输出)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "运行日志：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > /tmp/report.md
+          gh issue comment "$ISSUE_NUMBER" --body-file /tmp/report.md
+        env:
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          CHANGED: ${{ steps.pr.outputs.changed }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
