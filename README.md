@@ -2,7 +2,7 @@
 
 记录每天发布的目标城市、目标岗位。
 
-- 每天北京时间 **16:30** 采集 GitHub Trending，**17:00** 采集招聘岗位，**17:30** 统一部署。
+- 每天北京时间 **16:30** 生成 GitHub Trending 日报（日榜 / 周榜 / 月榜），**17:00** 采集招聘岗位，**17:30** 统一部署。
 - 博客基于 [Hugo](https://gohugo.io/) + [Stack](https://github.com/CaiJimmy/hugo-theme-stack) 主题。
 - `main`：博客源码分支。
 - `gh-page`：Hugo 构建产物，由 Vercel 自动部署。
@@ -33,10 +33,11 @@ hugo --gc --minify
 
 ```
 content/post/          文章
-content/page/          归档、搜索、GitHub Trending 等独立页面
+content/page/          归档、搜索等独立页面
+content/trending/      GitHub Trending 日报（每天一篇，含日榜 / 周榜 / 月榜）
 config/_default/       Hugo 与 Stack 主题配置
 collect.env            采集范围：城市集合、岗位集合、限速与请求上限
-scripts/collect-github-trending.mjs GitHub Trending 采集 + 独立页面渲染
+scripts/collect-github-trending.mjs GitHub Trending 日报采集 + 三榜渲染
 themes/hugo-theme-stack Stack 主题（git submodule）
 ```
 
@@ -103,40 +104,42 @@ TODAYJOB_ENV_FILE=.env TODAYJOB_MAX_REQUESTS=20 TODAYJOB_OUTPUT=/tmp/preview.md 
 
 每天北京时间，GitHub Actions 按下面的顺序执行：
 
-1. **16:30**：`.github/workflows/trending.yml` 抓取 GitHub Trending，生成 `content/page/github-trending/index.md`，提交到 `main`。
+1. **16:30**：`.github/workflows/trending.yml` 抓取 GitHub Trending 的日榜、周榜、月榜，生成 `content/trending/YYYY-MM-DD/index.md`，提交到 `main`。
 2. **17:00**：`.github/workflows/collect.yml` 读取 `collect.env`（或 Secrets 覆盖），调用智联招聘公开职位接口采集配置中的城市和岗位。
 3. 按公司聚合后生成 `content/post/YYYY-MM-DD/index.md`，提交到 `main`。
 4. **17:30**：`.github/workflows/deploy.yml` 构建 Hugo 站点，将 `public/` 推送到 `gh-page`；Vercel 监听 `gh-page` 自动完成线上部署。
 
 采集和部署是分开的：采集提交不会触发部署，只有 17:30 的定时任务（或手动运行 **deploy**）才会发布线上版本。
 
-### GitHub Trending 页面
+### GitHub Trending 日报
 
-页面地址：<https://todayjob.vercel.app/github-trending/>
+日报列表：<https://todayjob.vercel.app/trending/>
 
-独立的采集模块是 `scripts/collect-github-trending.mjs`。GitHub 没有公开的 Trending JSON API，模块直接抓取 `https://github.com/trending?since=daily` 的 HTML 并解析，只展示四列：
+独立的采集模块是 `scripts/collect-github-trending.mjs`。GitHub 没有公开的 Trending JSON API，模块直接抓取 `https://github.com/trending` 的 HTML 并解析。每次运行生成当天的一篇日报，日报内包含日榜、周榜、月榜三张表，每张表只展示四列：
 
 | 仓库名 | Stars | 标签 | 时间 |
 | --- | ---: | --- | --- |
 | 仓库全名，点击跳转 GitHub | Star 总数 | 主语言（无语言时显示「未标注」） | 本次采集时间（北京时间） |
 
+输出路径为 `content/trending/YYYY-MM-DD/index.md`。同一天重复运行会覆盖当天日报；之前日期的日报会保留，形成可翻阅的日报列表。
+
 本地预览：
 
 ```bash
 node scripts/collect-github-trending.mjs
-# 或指定时间范围 / 语言 / 输出路径
-TODAYJOB_TRENDING_SINCE=weekly node scripts/collect-github-trending.mjs
+# 指定语言 / 输出目录 / 输出文件
 TODAYJOB_TRENDING_LANGUAGE=python node scripts/collect-github-trending.mjs
+TODAYJOB_TRENDING_DIR=/tmp/trending node scripts/collect-github-trending.mjs
 TODAYJOB_TRENDING_OUTPUT=/tmp/trending.md node scripts/collect-github-trending.mjs
 ```
 
-可选环境变量：`TODAYJOB_TRENDING_SINCE`（`daily` / `weekly` / `monthly`）、`TODAYJOB_TRENDING_LANGUAGE`（语言 slug，如 `python`、`rust`、`c++`、`c%23`）、`TODAYJOB_TRENDING_OUTPUT`。默认输出到 `content/page/github-trending/index.md`，每天覆盖更新。
+可选环境变量：`TODAYJOB_TRENDING_LANGUAGE`（语言 slug，如 `python`、`rust`、`c++`、`c%23`）、`TODAYJOB_TRENDING_DIR`（默认 `content/trending`）、`TODAYJOB_TRENDING_OUTPUT`（调试时覆盖具体文件路径）。
 
 ### 手动运行
 
 在 GitHub Actions 页面选择 **collect** → **Run workflow**，可以手动采集；`date` 留空表示北京时间当天。修改 `collect.env` 后提交，下一次运行会自动使用新的城市和岗位集合。
 
-GitHub Trending 可以在 **trending** → **Run workflow** 手动采集；需要立即发布时，再手动运行 **deploy**。
+GitHub Trending 日报可以在 **trending** → **Run workflow** 手动采集；需要立即发布时，再手动运行 **deploy**。
 
 ### 可选 Secret：`ZHAOPIN_COOKIE`
 
@@ -184,7 +187,7 @@ python3 scripts/send-cookie-alert.py --test
 
 `gh-page` 分支保存构建后的静态文件，Vercel 监听该分支并自动部署。
 
-- 每天北京时间 **17:30** 自动部署一次，把当天 16:30 的 GitHub Trending 和 17:00 的岗位日报一起发布。
+- 每天北京时间 **17:30** 自动部署一次，把当天 16:30 的 GitHub Trending 日报和 17:00 的岗位日报一起发布。
 - 采集工作流不再触发部署；如需立即上线，在 Actions 页面手动运行 **deploy**。
 - `deploy` 会先等待正在运行的 **collect** / **trending** 任务结束（最多 20 分钟），再构建最新 `main`。
 

@@ -27,8 +27,8 @@
 
 [[main]]
     identifier = "trending"
-    name       = "GitHub 趋势"
-    url        = "/github-trending/"
+    name       = "GitHub 日报"
+    url        = "/trending/"
     weight     = -85
 
     [main.params]

@@ -3,38 +3,46 @@
  * GitHub Trending 独立采集模块。
  *
  * GitHub 没有公开的 Trending JSON API，/trending 是服务端渲染的 HTML，
- * 因此这里直接抓取页面并解析 article.Box-row。输出是一张独立页面，只保留
- * 仓库名（可点击）、Stars、标签（主语言）和采集时间四列。
+ * 因此这里直接抓取页面并解析 article.Box-row。每天生成一篇日报，日报内包含
+ * 日榜、周榜、月榜三张表；每张表只保留仓库名（可点击）、Stars、标签和采集时间。
  *
  * 用法：
  *   node scripts/collect-github-trending.mjs
  *   TODAYJOB_TRENDING_OUTPUT=/tmp/trending.md node scripts/collect-github-trending.mjs
- *   TODAYJOB_TRENDING_SINCE=weekly node scripts/collect-github-trending.mjs
  *   TODAYJOB_TRENDING_LANGUAGE=python node scripts/collect-github-trending.mjs
  *
  * 可选环境变量：
- *   TODAYJOB_TRENDING_SINCE    daily（默认）/ weekly / monthly
  *   TODAYJOB_TRENDING_LANGUAGE 语言 slug，例如 python、rust、c++、c%23
- *   TODAYJOB_TRENDING_OUTPUT   页面输出路径，默认 content/page/github-trending/index.md
+ *   TODAYJOB_TRENDING_DIR      日报输出目录，默认 content/trending
+ *   TODAYJOB_TRENDING_OUTPUT   覆盖输出文件路径（调试用）
  *   TODAYJOB_TRENDING_STATUS_FILE
  *                              运行摘要 JSON 路径，默认 .todayjob/github-trending-last-run.json
  */
 
+import dns from 'node:dns';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
 
 const ROOT = process.cwd();
 const TIME_ZONE = 'Asia/Shanghai';
 const BASE = 'https://github.com';
 const REQUEST_TIMEOUT_MS = 20_000;
 
-const sinceRaw = String(process.env.TODAYJOB_TRENDING_SINCE || 'daily').toLowerCase();
-const SINCE = ['daily', 'weekly', 'monthly'].includes(sinceRaw) ? sinceRaw : 'daily';
+// 部分 runner / 本机 IPv6 不可达，优先 IPv4，避免 fetch 卡在 IPv6 连接上。
+dns.setDefaultResultOrder('ipv4first');
+
+const PERIODS = [
+  { since: 'daily', label: '日榜' },
+  { since: 'weekly', label: '周榜' },
+  { since: 'monthly', label: '月榜' },
+];
 const LANGUAGE = String(process.env.TODAYJOB_TRENDING_LANGUAGE || '').trim();
-const OUTPUT_PATH =
-  process.env.TODAYJOB_TRENDING_OUTPUT ||
-  path.join(ROOT, 'content', 'page', 'github-trending', 'index.md');
+const TRENDING_DIR =
+  process.env.TODAYJOB_TRENDING_DIR ||
+  path.join(ROOT, 'content', 'trending');
+const OUTPUT_OVERRIDE = process.env.TODAYJOB_TRENDING_OUTPUT || '';
 const STATUS_PATH =
   process.env.TODAYJOB_TRENDING_STATUS_FILE ||
   path.join(ROOT, '.todayjob', 'github-trending-last-run.json');
@@ -74,6 +82,16 @@ function shanghaiParts(date) {
   };
 }
 
+function shanghaiDate(date) {
+  const p = shanghaiParts(date);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function shanghaiChineseDate(date) {
+  const p = shanghaiParts(date);
+  return `${p.year}年${Number(p.month)}月${Number(p.day)}日`;
+}
+
 function shanghaiDateTime(date) {
   const p = shanghaiParts(date);
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
@@ -84,10 +102,10 @@ function shanghaiIso(date) {
   return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}+08:00`;
 }
 
-function trendingUrl() {
+function trendingUrl(since) {
   const pathname = LANGUAGE ? `/trending/${LANGUAGE}` : '/trending';
   const url = new URL(BASE + pathname);
-  url.searchParams.set('since', SINCE);
+  url.searchParams.set('since', since);
   return url.toString();
 }
 
@@ -228,62 +246,102 @@ function formatStars(stars) {
     : stars.toLocaleString('en-US');
 }
 
-function renderPage({ items, collectedAt, sourceUrl }) {
+function renderPage({ periods, collectedAt }) {
   const collectedText = shanghaiDateTime(collectedAt);
+  const date = shanghaiDate(collectedAt);
+  const chineseDate = shanghaiChineseDate(collectedAt);
   const iso = shanghaiIso(collectedAt);
+  const total = periods.reduce((sum, period) => sum + period.items.length, 0);
+  const sourceRoot = LANGUAGE
+    ? `${BASE}/trending/${LANGUAGE}`
+    : `${BASE}/trending`;
+
   const lines = [
     '---',
-    'title: "GitHub Trending"',
-    'slug: "github-trending"',
+    `title: "${chineseDate} GitHub Trending 日报"`,
+    `slug: "${date}"`,
     `date: ${iso}`,
     `lastmod: ${iso}`,
-    'description: "GitHub 每日 Trending 仓库榜：仓库名、Stars、标签与采集时间。"',
+    `description: "${date} GitHub Trending 日榜、周榜、月榜，共 ${total} 个仓库。"`,
+    'categories:',
+    '    - 日报',
+    'tags:',
+    '    - GitHub Trending',
     'comments: false',
     '---',
     '',
-    `> 采集时间：${collectedText}（北京时间） · 数据来源：[GitHub Trending](${sourceUrl})`,
+    `> 采集时间：${collectedText}（北京时间）  `,
+    `> 数据来源：[GitHub Trending](${sourceRoot})  `,
+    `> 统计范围：${LANGUAGE || '全语言'} · 日榜 / 周榜 / 月榜`,
     '',
-    '| 仓库名 | Stars | 标签 | 时间 |',
-    '| --- | ---: | --- | --- |',
   ];
 
-  for (const item of items) {
+  for (const period of periods) {
     lines.push(
-      `| [${mdCell(item.fullName)}](${item.url}) | ${formatStars(item.stars)} | ${mdCell(item.tag)} | ${collectedText} |`,
+      `## ${period.label}`,
+      '',
+      `> 共 ${period.items.length} 个仓库 · [在 GitHub 查看${period.label}](${period.sourceUrl})`,
+      '',
+      '| 仓库名 | Stars | 标签 | 时间 |',
+      '| --- | ---: | --- | --- |',
     );
+
+    for (const item of period.items) {
+      lines.push(
+        `| [${mdCell(item.fullName)}](${item.url}) | ${formatStars(item.stars)} | ${mdCell(item.tag)} | ${collectedText} |`,
+      );
+    }
+
+    lines.push('');
   }
 
-  lines.push('', '');
-  return lines.join('\n');
+  return `${lines.join('\n')}\n`;
 }
 
 async function collect() {
-  const sourceUrl = trendingUrl();
-  console.error(`[start] url=${sourceUrl}`);
+  const collectedAt = new Date();
+  const periods = [];
 
-  const html = await fetchHtml(sourceUrl);
-  const items = parseTrending(html);
-  if (items.length === 0) {
-    throw new Error(
-      'No repository found on the Trending page. The page structure may have changed, or the filter returned no data.',
-    );
+  for (const period of PERIODS) {
+    const sourceUrl = trendingUrl(period.since);
+    console.error(`[start] ${period.label} url=${sourceUrl}`);
+
+    const html = await fetchHtml(sourceUrl);
+    const items = parseTrending(html);
+    if (items.length === 0) {
+      throw new Error(
+        `No repository found on the ${period.since} Trending page. The page structure may have changed, or the filter returned no data.`,
+      );
+    }
+
+    periods.push({ ...period, sourceUrl, items });
   }
 
-  const collectedAt = new Date();
-  const markdown = renderPage({ items, collectedAt, sourceUrl });
+  const date = shanghaiDate(collectedAt);
+  const outputPath =
+    OUTPUT_OVERRIDE || path.join(TRENDING_DIR, date, 'index.md');
+  const markdown = renderPage({ periods, collectedAt });
 
-  await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
-  await writeFile(OUTPUT_PATH, markdown, 'utf8');
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, markdown, 'utf8');
 
   const summary = {
-    source: sourceUrl,
-    since: SINCE,
     language: LANGUAGE || null,
     collectedAt: collectedAt.toISOString(),
     collectedAtShanghai: shanghaiDateTime(collectedAt),
-    items: items.length,
-    missingStars: items.filter((item) => item.stars === null).length,
-    output: OUTPUT_PATH,
+    date,
+    output: outputPath,
+    periods: Object.fromEntries(
+      periods.map((period) => [
+        period.since,
+        {
+          source: period.sourceUrl,
+          items: period.items.length,
+          missingStars: period.items.filter((item) => item.stars === null)
+            .length,
+        },
+      ]),
+    ),
   };
 
   await mkdir(path.dirname(STATUS_PATH), { recursive: true });
@@ -291,7 +349,11 @@ async function collect() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-collect().catch((error) => {
-  console.error(`[fatal] ${error.stack || error.message}`);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  collect().catch((error) => {
+    console.error(`[fatal] ${error.stack || error.message}`);
+    process.exit(1);
+  });
+}
+
+export { parseTrending, renderPage, shanghaiDate, trendingUrl };

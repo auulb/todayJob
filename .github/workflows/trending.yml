@@ -16,7 +16,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout main
@@ -33,11 +33,10 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Collect GitHub Trending
+      - name: Collect GitHub Trending daily report
         env:
           TZ: Asia/Shanghai
-          # Optional overrides:
-          # TODAYJOB_TRENDING_SINCE: daily
+          # Optional override:
           # TODAYJOB_TRENDING_LANGUAGE: python
         run: node scripts/collect-github-trending.mjs
 
@@ -49,11 +48,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add content/page/github-trending
+          git add content/trending
           if git diff --cached --quiet; then
             echo "No trending update to commit."
             exit 0
           fi
 
-          git commit -m "chore: update GitHub trending $(date +%F)"
+          git commit -m "chore: add GitHub trending daily report $(date +%F)"
           git push origin HEAD:main
