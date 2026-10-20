@@ -8,23 +8,34 @@ on:
 
 jobs:
   opencode:
+    # 只在评论区出现 /oc 或 /opencode 时触发，且只响应仓库所有者/协作者，防止陌生人滥用
     if: |
-      contains(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, '/opencode')
+      github.event.comment.user.type != 'Bot' && (
+        contains(github.event.comment.body, '/opencode') ||
+        contains(github.event.comment.body, '/oc')
+      ) && (
+        github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR'
+      )
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      contents: write
+      pull-requests: write
+      issues: write
     steps:
-       - name: Checkout repository
-         uses: actions/checkout@v6
-         with:
-           fetch-depth: 1
-           persist-credentials: false
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
 
-       - name: Run OpenCode
+      - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.OPENCODE_PAT }}
         with:
           model: deepseek/deepseek-flash
-          github_token: ${{ secrets.TOKEN }}
+          use_github_token: true
+          mentions: "/opencode,/oc"
