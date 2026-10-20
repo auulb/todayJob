@@ -586,16 +586,9 @@ function uniqueStrings(values) {
 }
 
 function locationText(jobs) {
-  const places = uniqueStrings(
-    jobs.map((job) => {
-      const district = job.district || '';
-      const street = job.street && job.street !== district ? job.street : '';
-      return [district, street].filter(Boolean).join(' · ');
-    }),
-  );
-
-  if (places.length === 0) return CITY_NAME;
-  return `${CITY_NAME} · ${places.slice(0, 3).join('；')}${places.length > 3 ? ' 等' : ''}`;
+  const districts = uniqueStrings(jobs.map((job) => job.district));
+  if (districts.length === 0) return CITY_NAME;
+  return `${CITY_NAME} · ${districts.slice(0, 3).join('、')}${districts.length > 3 ? ' 等' : ''}`;
 }
 
 function aggregate(jobs) {
@@ -701,9 +694,10 @@ function renderMarkdown({ companies, devJobs, allJobsOnDate, keywords, client, c
     );
 
     for (const item of companies) {
+      const linkTitle = mdCell(item.title).replace(/"/g, '\\"');
       const link = item.url
-        ? `[${mdLinkText(item.title)}](${item.url})`
-        : mdCell(item.title);
+        ? `[查看岗位](${item.url} "${linkTitle}")`
+        : '查看岗位';
       lines.push(
         `| ${mdCell(item.company)} | ${item.count} | ${mdCell(item.location)} | ${link} | ${mdCell(formatTime(item.publishTime))} |`,
       );
@@ -716,7 +710,7 @@ function renderMarkdown({ companies, devJobs, allJobsOnDate, keywords, client, c
     '',
     '- 仅统计发布时间在统计日期内的厦门开发岗位，按公司名称聚合。',
     '- “今日职位发布数量”是该公司当天在厦门发布的开发岗位数；同一岗位跨关键词命中只计一次。',
-    '- “岗位链接”取该公司当天最新发布的一个岗位，点击可查看详情。',
+    '- “岗位链接”取该公司当天最新发布的一个岗位，点击可查看详情；悬停可查看具体岗位名称。',
     '- 招聘平台数据可能存在延迟、重复或下架，最终以智联招聘页面为准。',
   );
 

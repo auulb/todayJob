@@ -1,0 +1,20 @@
+/* TodayJob: keep the daily jobs table readable on narrow screens. */
+.article-content .table-wrapper table {
+    min-width: 620px;
+}
+
+/* Let company and location wrap naturally; keep the short columns on one line. */
+.article-content .table-wrapper td:nth-child(2),
+.article-content .table-wrapper td:nth-child(4),
+.article-content .table-wrapper td:nth-child(5) {
+    white-space: nowrap;
+}
+
+.article-content .table-wrapper td:first-child {
+    min-width: 180px;
+}
+
+.article-content .table-wrapper td:nth-child(3),
+.article-content .table-wrapper th:nth-child(3) {
+    min-width: 100px;
+}
