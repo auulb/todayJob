@@ -8,6 +8,15 @@
         icon = "home"
 
 [[main]]
+    identifier = "search"
+    name       = "搜索"
+    url        = "/search/"
+    weight     = -95
+
+    [main.params]
+        icon = "search"
+
+[[main]]
     identifier = "archives"
     name       = "归档"
     url        = "/archives/"
