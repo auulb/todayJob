@@ -1,0 +1,63 @@
+name: collect
+
+on:
+  schedule:
+    # 09:00 UTC = 17:00 Asia/Shanghai
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Target date in Asia/Shanghai (YYYY-MM-DD). Leave empty for today.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: todayjob-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          # A PAT is optional. With it, the push also triggers the deploy workflow's
+          # push event; without it, deploy.yml is still triggered by workflow_run.
+          token: ${{ secrets.TODAYJOB_PAT || github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Collect jobs and write today's post
+        env:
+          TZ: Asia/Shanghai
+          TODAYJOB_DATE: ${{ github.event.inputs.date }}
+          ZHAOPIN_COOKIE: ${{ secrets.ZHAOPIN_COOKIE }}
+        run: node scripts/collect.mjs
+
+      - name: Commit and push to main
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add content/post
+          if git diff --cached --quiet; then
+            echo "No new daily post to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: publish $(date +%F) Xiamen dev jobs report"
+          git push origin HEAD:main
