@@ -3,8 +3,8 @@ name: deploy
 on:
   schedule:
     # 09:30 UTC = 17:30 Asia/Shanghai
-    # Collection runs at 16:30 (trending) and 17:00 (jobs); deploy once at 17:30
-    # so a collection commit does not trigger its own deployment.
+    # Collections run at 16:00 (51job), 16:30 (trending) and 17:00 (Zhaopin);
+    # deploy once at 17:30 so a collection commit does not trigger its own deployment.
     - cron: '30 9 * * *'
   workflow_dispatch:
 
@@ -34,7 +34,8 @@ jobs:
           while :; do
             collect=$(gh run list --workflow=collect.yml --status=in_progress --limit 5 --json databaseId --jq 'length')
             trending=$(gh run list --workflow=trending.yml --status=in_progress --limit 5 --json databaseId --jq 'length')
-            if [ "$collect" = "0" ] && [ "$trending" = "0" ]; then
+            job51=$(gh run list --workflow=collect-51job.yml --status=in_progress --limit 5 --json databaseId --jq 'length')
+            if [ "$collect" = "0" ] && [ "$trending" = "0" ] && [ "$job51" = "0" ]; then
               echo "Collectors are idle; deploying the latest main."
               break
             fi
