@@ -27,4 +27,4 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         with:
           model: deepseek/deepseek-flash
-          github_token: ${{ secrets.github_token }}
+          github_token: ${{ secrets.TOKEN }}
