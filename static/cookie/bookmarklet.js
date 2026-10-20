@@ -96,21 +96,53 @@ function todayJobCookieHelper() {
         copyBtn.style.background = '#2563eb';
       }, 1800);
     }
-    function fallback() {
+    function manual() {
+      copyBtn.textContent = '请手动全选复制';
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, textarea.value.length);
+    }
+    function selectAndCopy() {
       textarea.focus();
       textarea.select();
       textarea.setSelectionRange(0, textarea.value.length);
       try {
-        document.execCommand('copy');
-        done();
+        return document.execCommand('copy');
       } catch (error) {
-        copyBtn.textContent = '请手动全选复制';
+        return false;
       }
     }
+
+    // Prefer the synchronous path: it works in more browsers and does not
+    // depend on clipboard permissions or a focused document.
+    if (selectAndCopy()) {
+      done();
+      return;
+    }
+
     if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(cookie).then(done).catch(fallback);
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (!settled) {
+          settled = true;
+          manual();
+        }
+      }, 1200);
+      navigator.clipboard.writeText(cookie).then(function () {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          done();
+        }
+      }).catch(function () {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          manual();
+        }
+      });
     } else {
-      fallback();
+      manual();
     }
   });
 
