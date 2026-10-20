@@ -25,15 +25,6 @@
     [main.params]
         icon = "archives"
 
-[[main]]
-    identifier = "trending"
-    name       = "GitHub 日报"
-    url        = "/trending/"
-    weight     = -85
-
-    [main.params]
-        icon = "brand-github"
-
 [[social]]
     identifier = "github"
     name       = "GitHub"

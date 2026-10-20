@@ -1,6 +1,6 @@
 ---
 title: "2026年10月21日 GitHub Trending 日报"
-slug: "2026-10-21"
+slug: "github-trending-2026-10-21"
 date: 2026-10-21T05:48:48+08:00
 lastmod: 2026-10-21T05:48:48+08:00
 description: "2026-10-21 GitHub Trending 日榜、周榜、月榜，共 49 个仓库。"
@@ -8,6 +8,8 @@ categories:
     - 日报
 tags:
     - GitHub Trending
+aliases:
+    - /trending/2026-10-21/
 comments: false
 ---
 

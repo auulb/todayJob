@@ -13,7 +13,7 @@
  *
  * 可选环境变量：
  *   TODAYJOB_TRENDING_LANGUAGE 语言 slug，例如 python、rust、c++、c%23
- *   TODAYJOB_TRENDING_DIR      日报输出目录，默认 content/trending
+ *   TODAYJOB_TRENDING_DIR      日报输出目录，默认 content/post
  *   TODAYJOB_TRENDING_OUTPUT   覆盖输出文件路径（调试用）
  *   TODAYJOB_TRENDING_STATUS_FILE
  *                              运行摘要 JSON 路径，默认 .todayjob/github-trending-last-run.json
@@ -41,7 +41,7 @@ const PERIODS = [
 const LANGUAGE = String(process.env.TODAYJOB_TRENDING_LANGUAGE || '').trim();
 const TRENDING_DIR =
   process.env.TODAYJOB_TRENDING_DIR ||
-  path.join(ROOT, 'content', 'trending');
+  path.join(ROOT, 'content', 'post');
 const OUTPUT_OVERRIDE = process.env.TODAYJOB_TRENDING_OUTPUT || '';
 const STATUS_PATH =
   process.env.TODAYJOB_TRENDING_STATUS_FILE ||
@@ -259,7 +259,7 @@ function renderPage({ periods, collectedAt }) {
   const lines = [
     '---',
     `title: "${chineseDate} GitHub Trending 日报"`,
-    `slug: "${date}"`,
+    `slug: "github-trending-${date}"`,
     `date: ${iso}`,
     `lastmod: ${iso}`,
     `description: "${date} GitHub Trending 日榜、周榜、月榜，共 ${total} 个仓库。"`,
@@ -319,7 +319,8 @@ async function collect() {
 
   const date = shanghaiDate(collectedAt);
   const outputPath =
-    OUTPUT_OVERRIDE || path.join(TRENDING_DIR, date, 'index.md');
+    OUTPUT_OVERRIDE ||
+    path.join(TRENDING_DIR, `github-trending-${date}`, 'index.md');
   const markdown = renderPage({ periods, collectedAt });
 
   await mkdir(path.dirname(outputPath), { recursive: true });

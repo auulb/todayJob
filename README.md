@@ -32,9 +32,8 @@ hugo --gc --minify
 ## 目录结构
 
 ```
-content/post/          文章
+content/post/          文章（招聘日报、GitHub Trending 日报、公告）
 content/page/          归档、搜索等独立页面
-content/trending/      GitHub Trending 日报（每天一篇，含日榜 / 周榜 / 月榜）
 config/_default/       Hugo 与 Stack 主题配置
 collect.env            采集范围：城市集合、岗位集合、限速与请求上限
 scripts/collect-github-trending.mjs GitHub Trending 日报采集 + 三榜渲染
@@ -104,7 +103,7 @@ TODAYJOB_ENV_FILE=.env TODAYJOB_MAX_REQUESTS=20 TODAYJOB_OUTPUT=/tmp/preview.md 
 
 每天北京时间，GitHub Actions 按下面的顺序执行：
 
-1. **16:30**：`.github/workflows/trending.yml` 抓取 GitHub Trending 的日榜、周榜、月榜，生成 `content/trending/YYYY-MM-DD/index.md`，提交到 `main`。
+1. **16:30**：`.github/workflows/trending.yml` 抓取 GitHub Trending 的日榜、周榜、月榜，生成 `content/post/github-trending-YYYY-MM-DD/index.md`，提交到 `main`。
 2. **17:00**：`.github/workflows/collect.yml` 读取 `collect.env`（或 Secrets 覆盖），调用智联招聘公开职位接口采集配置中的城市和岗位。
 3. 按公司聚合后生成 `content/post/YYYY-MM-DD/index.md`，提交到 `main`。
 4. **17:30**：`.github/workflows/deploy.yml` 构建 Hugo 站点，将 `public/` 推送到 `gh-page`；Vercel 监听 `gh-page` 自动完成线上部署。
@@ -113,7 +112,7 @@ TODAYJOB_ENV_FILE=.env TODAYJOB_MAX_REQUESTS=20 TODAYJOB_OUTPUT=/tmp/preview.md 
 
 ### GitHub Trending 日报
 
-日报列表：<https://todayjob.vercel.app/trending/>
+GitHub Trending 日报和招聘日报一样，会出现在首页、归档和搜索结果中，不再单独占用左侧菜单。
 
 独立的采集模块是 `scripts/collect-github-trending.mjs`。GitHub 没有公开的 Trending JSON API，模块直接抓取 `https://github.com/trending` 的 HTML 并解析。每次运行生成当天的一篇日报，日报内包含日榜、周榜、月榜三张表，每张表只展示四列：
 
@@ -121,7 +120,7 @@ TODAYJOB_ENV_FILE=.env TODAYJOB_MAX_REQUESTS=20 TODAYJOB_OUTPUT=/tmp/preview.md 
 | --- | ---: | --- | --- |
 | 仓库全名，点击跳转 GitHub | Star 总数 | 主语言（无语言时显示「未标注」） | 本次采集时间（北京时间） |
 
-输出路径为 `content/trending/YYYY-MM-DD/index.md`。同一天重复运行会覆盖当天日报；之前日期的日报会保留，形成可翻阅的日报列表。
+输出路径为 `content/post/github-trending-YYYY-MM-DD/index.md`，页面地址为 `/p/github-trending-YYYY-MM-DD/`。同一天重复运行会覆盖当天日报；之前日期的日报会和其他文章一起保留在归档中。
 
 本地预览：
 
@@ -133,7 +132,7 @@ TODAYJOB_TRENDING_DIR=/tmp/trending node scripts/collect-github-trending.mjs
 TODAYJOB_TRENDING_OUTPUT=/tmp/trending.md node scripts/collect-github-trending.mjs
 ```
 
-可选环境变量：`TODAYJOB_TRENDING_LANGUAGE`（语言 slug，如 `python`、`rust`、`c++`、`c%23`）、`TODAYJOB_TRENDING_DIR`（默认 `content/trending`）、`TODAYJOB_TRENDING_OUTPUT`（调试时覆盖具体文件路径）。
+可选环境变量：`TODAYJOB_TRENDING_LANGUAGE`（语言 slug，如 `python`、`rust`、`c++`、`c%23`）、`TODAYJOB_TRENDING_DIR`（默认 `content/post`）、`TODAYJOB_TRENDING_OUTPUT`（调试时覆盖具体文件路径）。
 
 ### 评论系统
 
