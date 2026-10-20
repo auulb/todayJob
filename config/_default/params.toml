@@ -28,7 +28,23 @@ favicon        = "img/avatar.svg"
     ]
 
 [comments]
-    enabled = false
+    enabled  = true
+    provider = "giscus"
+
+    [comments.giscus]
+        repo             = "auulb/todayJob"
+        repoID           = "R_kgDOVRG1UQ"
+        category         = "General"
+        categoryID       = "DIC_kwDOVRG1Uc4DJNCK"
+        mapping          = "pathname"
+        strict           = 0
+        reactionsEnabled = 1
+        emitMetadata     = 0
+        inputPosition    = "top"
+        lightTheme       = "light"
+        darkTheme        = "dark_dimmed"
+        lang             = "zh-CN"
+        loading          = "lazy"
 
 [cookies]
     enabled = false

@@ -10,7 +10,7 @@ tags:
     - 厦门
     - 开发岗位
     - Hugo
-comments: false
+comments: true
 ---
 
 ## 为什么要做 TodayJob

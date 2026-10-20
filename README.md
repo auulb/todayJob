@@ -135,6 +135,17 @@ TODAYJOB_TRENDING_OUTPUT=/tmp/trending.md node scripts/collect-github-trending.m
 
 可选环境变量：`TODAYJOB_TRENDING_LANGUAGE`（语言 slug，如 `python`、`rust`、`c++`、`c%23`）、`TODAYJOB_TRENDING_DIR`（默认 `content/trending`）、`TODAYJOB_TRENDING_OUTPUT`（调试时覆盖具体文件路径）。
 
+### 评论系统
+
+站点使用 [giscus](https://giscus.app/) 承载评论，评论存放在本仓库的 GitHub Discussions：
+
+- 访客必须使用 GitHub 账号登录后才能留言，未登录只能阅读。
+- 评论数据直接保存在本仓库的 Discussions，不经过额外的评论服务器。giscus GitHub App 只授权本仓库的 Discussions 读写权限。
+- 站点本身不会发送邮件。仓库的 **Watch** 已设为 **Custom** 并关闭 **Discussions** 通知；如需调整，可在仓库首页重新选择通知范围。
+- 评论管理：进入仓库 **Discussions**，找到对应页面路径的讨论，可回复、隐藏或删除。
+- 每日岗位日报和公告页开启评论；GitHub Trending 日报保持关闭，避免每天自动生成新讨论。
+- 配置位于 `config/_default/params.toml` 的 `[comments.giscus]`，当前使用 `General` 分类和 `pathname` 映射。
+
 ### 手动运行
 
 在 GitHub Actions 页面选择 **collect** → **Run workflow**，可以手动采集；`date` 留空表示北京时间当天。修改 `collect.env` 后提交，下一次运行会自动使用新的城市和岗位集合。

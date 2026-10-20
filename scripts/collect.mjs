@@ -1011,7 +1011,7 @@ function renderMarkdown({ targets, client, collectedAt, budgetExhausted, request
     ...cities.map((city) => `    - ${JSON.stringify(city)}`),
     ...jobs.map((job) => `    - ${JSON.stringify(`${job}岗位`)}`),
     '    - "招聘日报"',
-    'comments: false',
+    'comments: true',
     '---',
     '',
     `> 统计日期：${TARGET_DATE}（北京时间 00:00–24:00）  `,
