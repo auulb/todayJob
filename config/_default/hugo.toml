@@ -1,4 +1,4 @@
-baseURL                = "/"
+baseURL                = "https://todayjob.vercel.app/"
 locale                 = "zh-cn"
 title                  = "TodayJob"
 theme                  = "hugo-theme-stack"
