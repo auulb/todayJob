@@ -8,12 +8,18 @@ on:
 
 jobs:
   opencode:
-    # 只在评论区出现 /oc 或 /opencode 时触发，且只响应仓库所有者/协作者，防止陌生人滥用
+    # 触发规则：评论【必须以】/oc 或 /opencode 开头（例如 `/oc 帮我修一下这个 bug`）。
+    # 用 startsWith 而不是 contains，是为了避免 OpenCode 自己的回复里出现
+    # `.github/workflows/opencode.yml` 这类路径（含 "/opencode"）而触发无限循环。
+    # 同时忽略机器人评论、忽略包含 Actions 运行链接的评论，并且只允许仓库所有者/协作者触发。
     if: |
-      github.event.comment.user.type != 'Bot' && (
-        contains(github.event.comment.body, '/opencode') ||
-        contains(github.event.comment.body, '/oc')
-      ) && (
+      github.event.comment.user.type != 'Bot' &&
+      !contains(github.event.comment.body, '/actions/runs/') &&
+      (
+        startsWith(github.event.comment.body, '/oc') ||
+        startsWith(github.event.comment.body, '/opencode')
+      ) &&
+      (
         github.event.comment.author_association == 'OWNER' ||
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'COLLABORATOR'
@@ -23,6 +29,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
