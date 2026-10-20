@@ -1,15 +1,16 @@
 name: deploy
 
 on:
-  push:
-    branches: [main]
-  workflow_run:
-    workflows: ["collect"]
-    types: [completed]
+  schedule:
+    # 09:30 UTC = 17:30 Asia/Shanghai
+    # Collection runs at 16:30 (trending) and 17:00 (jobs); deploy once at 17:30
+    # so a collection commit does not trigger its own deployment.
+    - cron: '30 9 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: todayjob-deploy
@@ -17,12 +18,34 @@ concurrency:
 
 jobs:
   deploy:
-    # A failed collection should not publish a partial or stale page.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
 
     steps:
+      # The 17:00 job collection can occasionally run long. Wait for the
+      # scheduled collectors to finish so this build sees their commits.
+      - name: Wait for scheduled collectors
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1200))
+          while :; do
+            collect=$(gh run list --workflow=collect.yml --status=in_progress --limit 5 --json databaseId --jq 'length')
+            trending=$(gh run list --workflow=trending.yml --status=in_progress --limit 5 --json databaseId --jq 'length')
+            if [ "$collect" = "0" ] && [ "$trending" = "0" ]; then
+              echo "Collectors are idle; deploying the latest main."
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::Collectors are still running after 20 minutes; deploying the current main."
+              break
+            fi
+            echo "Waiting for collectors (collect=$collect, trending=$trending)..."
+            sleep 30
+          done
+
       - name: Checkout main
         uses: actions/checkout@v5
         with:

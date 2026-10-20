@@ -1,0 +1,59 @@
+name: trending
+
+on:
+  schedule:
+    # 08:30 UTC = 16:30 Asia/Shanghai
+    - cron: '30 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: todayjob-trending
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          # A PAT is optional; it only matters if the push should trigger
+          # other push-based workflows.
+          token: ${{ secrets.TODAYJOB_PAT || github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Collect GitHub Trending
+        env:
+          TZ: Asia/Shanghai
+          # Optional overrides:
+          # TODAYJOB_TRENDING_SINCE: daily
+          # TODAYJOB_TRENDING_LANGUAGE: python
+        run: node scripts/collect-github-trending.mjs
+
+      - name: Commit and push to main
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add content/page/github-trending
+          if git diff --cached --quiet; then
+            echo "No trending update to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update GitHub trending $(date +%F)"
+          git push origin HEAD:main
