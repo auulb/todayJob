@@ -1,0 +1,17 @@
+baseURL                = "/"
+locale                 = "zh-cn"
+title                  = "TodayJob"
+theme                  = "hugo-theme-stack"
+defaultContentLanguage = "zh"
+hasCJKLanguage         = true
+enableRobotsTXT        = true
+
+[pagination]
+    pagerSize = 10
+
+[permalinks]
+    post = "/p/:slug/"
+    page = "/:slug/"
+
+[params]
+    description = "记录厦门每天发布的开发岗位"
