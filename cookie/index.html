@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>生成智联招聘 Cookie · TodayJob</title>
+  <style>
+    :root { color-scheme: light dark; --bg:#f8fafc; --card:#fff; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --blue:#2563eb; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0f172a; --card:#1e293b; --text:#f1f5f9; --muted:#94a3b8; --line:#334155; --blue:#60a5fa; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; line-height:1.7; }
+    main { width:min(760px, calc(100% - 32px)); margin:40px auto 64px; }
+    .back { color:var(--muted); text-decoration:none; font-size:14px; }
+    h1 { font-size:clamp(26px,5vw,36px); line-height:1.25; margin:18px 0 10px; letter-spacing:-.02em; }
+    .lead { color:var(--muted); margin:0 0 24px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:22px; margin:18px 0; }
+    h2 { font-size:18px; margin:0 0 12px; }
+    ol { padding-left:22px; margin:0; }
+    li { margin:8px 0; }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.9em; background:rgba(127,127,127,.12); padding:2px 5px; border-radius:5px; }
+    .bookmarklet { display:inline-flex; align-items:center; gap:8px; background:var(--blue); color:#fff; text-decoration:none; font-weight:700; padding:12px 20px; border-radius:12px; box-shadow:0 8px 22px rgba(37,99,235,.28); cursor:grab; user-select:none; }
+    .bookmarklet:active { cursor:grabbing; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:16px 0; }
+    .btn { display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); background:transparent; color:var(--text); text-decoration:none; font-size:14px; padding:10px 14px; border-radius:10px; cursor:pointer; }
+    .btn:hover { border-color:var(--blue); color:var(--blue); }
+    .note { border-left:3px solid #f59e0b; background:rgba(245,158,11,.08); padding:10px 14px; border-radius:0 8px 8px 0; color:var(--muted); font-size:14px; }
+    details { margin-top:16px; }
+    summary { cursor:pointer; color:var(--muted); font-size:14px; }
+    textarea { width:100%; height:96px; margin-top:10px; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; resize:vertical; }
+    .small { color:var(--muted); font-size:13px; }
+    .ok { color:#15803d; font-weight:600; }
+    @media (prefers-color-scheme: dark) { .ok { color:#4ade80; } }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← 返回 TodayJob</a>
+    <h1>一键生成智联招聘 Cookie</h1>
+    <p class="lead">手动登录智联招聘后，用下面这个书签读取当前登录 Cookie，并直接验证是否有效。全程只在你的浏览器里完成。</p>
+
+    <section class="card">
+      <h2>第一次使用：把按钮拖到书签栏</h2>
+      <div class="actions">
+        <a id="bookmarklet" class="bookmarklet" href="#" draggable="true" title="拖到浏览器书签栏">🔑 生成 Cookie</a>
+        <a class="btn" href="https://www.zhaopin.com/" target="_blank" rel="noopener">打开智联招聘</a>
+        <button id="copy-bookmarklet" class="btn" type="button">复制书签代码</button>
+      </div>
+      <p class="small" id="copy-hint" aria-live="polite">拖动不成功时，可以复制书签代码，新建一个书签，把代码粘贴到网址栏。</p>
+    </section>
+
+    <section class="card">
+      <h2>每次更新 Cookie</h2>
+      <ol>
+        <li>在电脑浏览器打开 <a href="https://www.zhaopin.com/" target="_blank" rel="noopener">智联招聘</a> 并登录。</li>
+        <li>确认地址栏是 <code>www.zhaopin.com</code>，然后点击书签栏里的「生成 Cookie」。</li>
+        <li>弹窗会自动读取并验证登录态。点「复制 Cookie」。</li>
+        <li>打开 GitHub 仓库的 <a href="https://github.com/auulb/todayJob/settings/secrets/actions" target="_blank" rel="noopener">Settings → Secrets → Actions</a>，更新 <code>ZHAOPIN_COOKIE</code>。</li>
+      </ol>
+      <p class="note">Cookie 等同于账号登录凭证。本工具只在 zhaopin.com 页面运行，不会把 Cookie 上传到 TodayJob 或任何第三方；请不要把 Cookie 发给别人。</p>
+    </section>
+
+    <section class="card">
+      <h2>常见问题</h2>
+      <p><b>提示缺少 at / rt？</b><br>说明当前页面没有登录态。请先在智联招聘完成登录，并回到 <code>www.zhaopin.com</code> 首页再点书签。</p>
+      <p><b>验证返回 0 条？</b><br>Cookie 可能已经过期。重新登录后再生成一次；如果仍然为 0，可以先复制，采集脚本会自动判断并回退匿名模式。</p>
+      <p><b>书签点击没反应？</b><br>有些浏览器会限制书签栏脚本。可以打开开发者工具 Console，粘贴下面的代码后回车。</p>
+      <details>
+        <summary>查看 / 复制控制台代码</summary>
+        <textarea id="console-code" readonly spellcheck="false"></textarea>
+        <div class="actions"><button id="copy-console" class="btn" type="button">复制控制台代码</button></div>
+      </details>
+    </section>
+  </main>
+
+  <script src="/cookie/bookmarklet.js"></script>
+  <script>
+    (function () {
+      var code = '(' + todayJobCookieHelper.toString() + ')()';
+      var href = 'javascript:' + encodeURIComponent(code);
+      var link = document.getElementById('bookmarklet');
+      link.setAttribute('href', href);
+      document.getElementById('console-code').value = code;
+
+      function copy(text, button, okText) {
+        function done() {
+          var old = button.textContent;
+          button.textContent = okText;
+          button.classList.add('ok');
+          setTimeout(function () {
+            button.textContent = old;
+            button.classList.remove('ok');
+          }, 1800);
+        }
+        function fallback() {
+          var area = document.createElement('textarea');
+          area.value = text;
+          area.style.position = 'fixed';
+          area.style.opacity = '0';
+          document.body.appendChild(area);
+          area.select();
+          try { document.execCommand('copy'); done(); } catch (error) {}
+          area.remove();
+        }
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(done).catch(fallback);
+        } else {
+          fallback();
+        }
+      }
+
+      document.getElementById('copy-bookmarklet').addEventListener('click', function () {
+        copy(href, this, '已复制 ✓');
+        document.getElementById('copy-hint').textContent = '已复制。新建书签，把代码粘贴到网址栏即可。';
+      });
+      document.getElementById('copy-console').addEventListener('click', function () {
+        copy(code, this, '已复制 ✓');
+      });
+    })();
+  </script>
+</body>
+</html>
